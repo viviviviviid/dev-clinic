@@ -1,0 +1,25 @@
+# secrets & config
+.env
+config.toml
+
+# build output
+bin/
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+*.local
+
+# Go
+*.test
+*.out
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/

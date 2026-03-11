@@ -1,0 +1,224 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0d1117;
+  color: #e6edf3;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background: #0d1117;
+}
+
+/* Main row: sidebar | editor | feedback */
+.app-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-sidebar {
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+/* Editor column: monaco (flex) + terminal (fixed height) */
+.app-editor {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-monaco {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-terminal {
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.app-problems {
+  flex-shrink: 0;
+  overflow: hidden;
+  border-top: 1px solid #30363d;
+}
+
+.app-feedback {
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.app-statusbar {
+  flex-shrink: 0;
+  border-top: 1px solid #21262d;
+}
+
+/* ── Resizer handles ── */
+.resizer {
+  flex-shrink: 0;
+  background: #21262d;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s;
+}
+
+.resizer:hover,
+.resizer:active {
+  background: #58a6ff;
+}
+
+.resizer-horizontal {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.resizer-vertical {
+  height: 4px;
+  cursor: row-resize;
+}
+
+.statusbar {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  background: #161b22;
+  user-select: none;
+}
+
+.statusbar-item {
+  font-size: 12px;
+  color: #8b949e;
+}
+
+.statusbar-item.lang {
+  color: #58a6ff;
+  font-weight: 600;
+}
+
+.statusbar-item.syncing {
+  color: #f0883e;
+}
+
+.statusbar-item.sync-time {
+  color: #3fb950;
+}
+
+.statusbar-item.skill-badge {
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.statusbar-item.skill-newbie {
+  color: #56d364;
+  background: rgba(86, 211, 100, 0.12);
+}
+
+.statusbar-item.skill-normal {
+  color: #f0883e;
+  background: rgba(240, 136, 62, 0.12);
+}
+
+.statusbar-item.skill-experienced {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.12);
+}
+
+.statusbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusbar-item.user-email {
+  font-size: 11px;
+  color: #6e7681;
+}
+
+.statusbar-icon-btn {
+  background: none;
+  border: none;
+  color: #8b949e;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  transition: color 0.15s;
+}
+
+.statusbar-icon-btn:hover {
+  color: #e6edf3;
+}
+
+.statusbar-terminal-btn {
+  background: none;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #8b949e;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.statusbar-terminal-btn:hover {
+  border-color: #58a6ff;
+  color: #58a6ff;
+}
+
+.statusbar-terminal-btn.active {
+  border-color: #3fb950;
+  color: #3fb950;
+  background: #0d2116;
+}
+
+.statusbar-problems-btn {
+  background: none;
+  border: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.statusbar-problems-btn:hover { background: #21262d; }
+.statusbar-problems-btn.active { background: #1c2128; }
+
+.sb-err { color: #f85149; font-size: 11px; }
+.sb-warn { color: #f0883e; font-size: 11px; }
+
+.loading-screen {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8b949e;
+  font-size: 14px;
+  background: #0d1117;
+}

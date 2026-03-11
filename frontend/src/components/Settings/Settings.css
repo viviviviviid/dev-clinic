@@ -1,0 +1,258 @@
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(13, 17, 23, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 2rem;
+}
+
+.settings-container {
+  display: flex;
+  width: 100%;
+  max-width: 900px;
+  height: 80vh;
+  min-height: 600px;
+  background: #161b22;
+  border-radius: 12px;
+  border: 1px solid #30363d;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.settings-sidebar {
+  width: 240px;
+  background: #0d1117;
+  border-right: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 0;
+}
+
+.settings-sidebar-header {
+  padding: 0 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.settings-sidebar-header h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-nav-item {
+  padding: 0.75rem 1.5rem;
+  color: #8b949e;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 500;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-nav-item:hover {
+  background: rgba(139, 148, 158, 0.1);
+  color: #e6edf3;
+}
+
+.settings-nav-item.active {
+  background: rgba(88, 166, 255, 0.1);
+  color: #58a6ff;
+  border-right: 3px solid #58a6ff;
+}
+
+.settings-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #161b22;
+}
+
+.settings-content {
+  flex: 1;
+  padding: 2.5rem;
+  overflow-y: auto;
+}
+
+.settings-content h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 2rem;
+  color: #e6edf3;
+  border-bottom: 1px solid #30363d;
+  padding-bottom: 1rem;
+}
+
+.settings-section {
+  margin-bottom: 2.5rem;
+}
+
+.settings-label {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: #e6edf3;
+}
+
+.settings-hint {
+  font-size: 0.85rem;
+  color: #8b949e;
+  margin-bottom: 1rem;
+}
+
+.settings-input {
+  width: 100%;
+  max-width: 400px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  color: #e6edf3;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  transition: border-color 0.2s;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: #58a6ff;
+}
+
+/* Grid Layouts for Options */
+.options-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.option-card {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.option-card:hover {
+  border-color: #8b949e;
+}
+
+.option-card.active {
+  border-color: #58a6ff;
+  background: rgba(88, 166, 255, 0.05);
+}
+
+.option-card strong {
+  color: #e6edf3;
+  font-size: 1rem;
+}
+
+.option-card p {
+  color: #8b949e;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.option-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Toggles */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 0;
+  border-bottom: 1px solid #21262d;
+}
+
+.toggle-info strong {
+  display: block;
+  font-size: 0.95rem;
+  color: #e6edf3;
+}
+
+.toggle-info p {
+  font-size: 0.85rem;
+  color: #8b949e;
+  margin-top: 0.25rem;
+}
+
+/* Custom Switch for Toggle */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #30363d;
+  transition: .2s;
+  border-radius: 24px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #e6edf3;
+  transition: .2s;
+  border-radius: 50%;
+}
+
+input:checked+.slider {
+  background-color: #238636;
+}
+
+input:checked+.slider:before {
+  transform: translateX(20px);
+}
+
+/* Footer Actions */
+.settings-footer {
+  padding: 1.5rem 2.5rem;
+  border-top: 1px solid #30363d;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 1rem;
+  background: #0d1117;
+}
+
+.settings-error {
+  color: #f85149;
+  font-size: 0.9rem;
+  margin-right: auto;
+}

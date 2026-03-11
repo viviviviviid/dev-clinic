@@ -1,0 +1,62 @@
+.problems-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #1c2128;
+  font-size: 12px;
+}
+
+.problems-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+  background: #161b22;
+  height: 28px;
+}
+
+.problems-title {
+  color: #e6edf3;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.problems-empty-label {
+  color: #484f58;
+  font-size: 11px;
+}
+
+.problems-count {
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.problems-count.sev-error { color: #f85149; background: rgba(248,81,73,.15); }
+.problems-count.sev-warning { color: #f0883e; background: rgba(240,136,62,.15); }
+
+.problems-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.problem-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #21262d;
+}
+.problem-item:hover { background: #21262d; }
+
+.problem-icon { flex-shrink: 0; font-size: 12px; }
+.problem-message { flex: 1; color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problem-location { flex-shrink: 0; color: #484f58; font-family: 'Consolas', monospace; }
+
+.problem-item.sev-error .problem-message { color: #ffa198; }
+.problem-item.sev-warning .problem-message { color: #ffa657; }

@@ -1,0 +1,81 @@
+.filetree {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.filetree-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8b949e;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+
+.filetree-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.filetree-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #484f58;
+  font-size: 13px;
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 1px 4px;
+  font-size: 13px;
+  color: #8b949e;
+  transition: background 0.1s;
+  user-select: none;
+}
+
+.tree-item:hover {
+  background: #21262d;
+  color: #e6edf3;
+}
+
+.tree-item.active {
+  background: #1f6feb33;
+  color: #58a6ff;
+}
+
+.tree-icon {
+  width: 10px;
+  font-size: 10px;
+  color: #484f58;
+}
+
+.tree-file-icon {
+  font-size: 13px;
+}
+
+.tree-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.changed-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f0883e;
+  flex-shrink: 0;
+}

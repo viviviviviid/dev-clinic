@@ -1,0 +1,60 @@
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0d1117;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+  height: 30px;
+}
+
+.terminal-title {
+  font-size: 12px;
+  color: #8b949e;
+  font-weight: 600;
+}
+
+.terminal-dir {
+  font-weight: 400;
+  color: #484f58;
+  font-family: 'Consolas', monospace;
+}
+
+.terminal-close {
+  background: none;
+  border: none;
+  color: #484f58;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.terminal-close:hover {
+  color: #e6edf3;
+  background: #21262d;
+}
+
+.terminal-body {
+  flex: 1;
+  overflow: hidden;
+  padding: 4px 8px;
+}
+
+/* xterm overrides */
+.terminal-body .xterm {
+  height: 100%;
+}
+
+.terminal-body .xterm-viewport {
+  background: #0d1117 !important;
+}
