@@ -42,6 +42,15 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const today = new Date()
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
 
+  // 테스트 모드 확인
+  const isTestMode = new URLSearchParams(window.location.search).has('test')
+  const testScenarios: Array<'greeting' | 'same_day_failed' | 'yesterday_failed' | 'streak_failed'> = [
+    'greeting',
+    'same_day_failed',
+    'yesterday_failed',
+    'streak_failed',
+  ]
+
   const [topics, setTopics] = useState<TopicSuggestion[]>([])
   const [todayMissions, setTodayMissions] = useState<MissionRecord[]>([])
   const [allHistory, setAllHistory] = useState<MissionRecord[]>([])
@@ -58,16 +67,24 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const [vnVisible, setVnVisible] = useState(false)
   const [vnFading, setVnFading] = useState(false)
   const [vnStep, setVnStep] = useState(0)
-  const [vnScenario, setVnScenario] = useState<'missed' | 'happy'>('happy')
+  const [vnScenario, setVnScenario] = useState<'greeting' | 'same_day_failed' | 'yesterday_failed' | 'streak_failed'>('greeting')
+  const [testScenarioIndex, setTestScenarioIndex] = useState(0)
 
   // VN 시나리오별 대사/이미지 정의
   const vnSequence = {
-    missed: [
-      { img: '/shocked.png', text: '헉...! 어제 훈련을 빠지셨잖아요?!' },
-      { img: '/angry.png',   text: '재활은 꾸준히 해야 한다고 몇 번을 말씀드렸어요! 오늘은 절대 빠지면 안 돼요!' },
+    greeting: [
+      { img: '/greeting.png', text: '어서 오세요! 오늘도 열심히 해봐요. 응원하고 있을게요~' },
     ],
-    happy: [
-      { img: '/pleasure.png', text: '어서 오세요! 오늘도 열심히 해봐요. 응원하고 있을게요~' },
+    same_day_failed: [
+      { img: '/same_day_failed.png', text: '어? 아직 오늘의 미션을 완료하지 않으셨잖아요! 마저 해야 합니다!' },
+    ],
+    yesterday_failed: [
+      { img: '/punishment.png', text: '어제 훈련을 빠지셨네요... 꾸준함이 재활의 핵심입니다!' },
+      { img: '/punishment.png', text: '오늘은 꼭 완료하셔야 해요. 화이팅! 💪' },
+    ],
+    streak_failed: [
+      { img: '/streak_failed.png', text: '진짜 죽어볼래요?' },
+      { img: '/streak_failed.png', text: '(말이 없다)' },
     ],
   }
 
@@ -78,6 +95,18 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     if (vnFading) return
     if (vnStep < currentSlides.length - 1) {
       setVnStep(prev => prev + 1)
+    } else if (isTestMode) {
+      // 테스트 모드: 다음 시나리오로 넘어감
+      if (testScenarioIndex < testScenarios.length - 1) {
+        const nextScenario = testScenarios[testScenarioIndex + 1]
+        setVnScenario(nextScenario)
+        setVnStep(0)
+        setTestScenarioIndex(prev => prev + 1)
+      } else {
+        // 모든 시나리오 완료
+        setVnFading(true)
+        setTimeout(() => setVnVisible(false), 420)
+      }
     } else {
       setVnFading(true)
       setTimeout(() => setVnVisible(false), 420)
@@ -112,6 +141,15 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   }, [todayPanelOpen])
 
   useEffect(() => {
+    // 테스트 모드: 바로 첫 시나리오 표시
+    if (isTestMode) {
+      setVnScenario(testScenarios[0])
+      setVnStep(0)
+      setVnVisible(true)
+      setLoading(false)
+      return
+    }
+
     Promise.all([
       getDailyMission().catch(() => ({ missions: [], topics: [] })),
       getDailyHistory(),
@@ -124,15 +162,51 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
         const history: MissionRecord[] = Array.isArray(hist) ? hist : []
         setAllHistory(history)
 
-        // 어제 날짜 계산
+        // 마지막 접속 날짜 확인
+        const lastAccessDate = localStorage.getItem('lastAccessDate')
+        const isSameDayAccess = lastAccessDate === todayStr
+
+        // 어제, 그저께 날짜 계산
         const yesterday = new Date(today)
         yesterday.setDate(yesterday.getDate() - 1)
         const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`
-        const hadYesterday = history.some(m => m.date === yesterdayStr)
 
-        setVnScenario(hadYesterday ? 'happy' : 'missed')
+        const dayBeforeYesterday = new Date(today)
+        dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2)
+        const dayBeforeYesterdayStr = `${dayBeforeYesterday.getFullYear()}-${String(dayBeforeYesterday.getMonth() + 1).padStart(2, '0')}-${String(dayBeforeYesterday.getDate()).padStart(2, '0')}`
+
+        // 어제/그저께 완료 여부 확인 (status='completed'인 경우만 완료로 판단)
+        const yesterdayMissions = history.filter(m => m.date === yesterdayStr)
+        const dayBeforeYesterdayMissions = history.filter(m => m.date === dayBeforeYesterdayStr)
+        const yesterdayCompleted = yesterdayMissions.some(m => m.status === 'completed')
+        const dayBeforeYesterdayCompleted = dayBeforeYesterdayMissions.some(m => m.status === 'completed')
+
+        // 오늘 미션 상태 확인
+        const todayHasActive = missions.some(m => m.status === 'active')
+
+        // 시나리오 결정
+        let scenario: 'greeting' | 'same_day_failed' | 'yesterday_failed' | 'streak_failed'
+
+        if (isSameDayAccess && todayHasActive) {
+          // 같은 날 재접속했는데 미션 미완료
+          scenario = 'same_day_failed'
+        } else if (!isSameDayAccess && !yesterdayCompleted && !dayBeforeYesterdayCompleted) {
+          // 새 날 접속하고 어제, 그저께 모두 미완료 (2일 이상 연속)
+          scenario = 'streak_failed'
+        } else if (!isSameDayAccess && !yesterdayCompleted) {
+          // 새 날 접속하고 어제 미완료
+          scenario = 'yesterday_failed'
+        } else {
+          // 그 외: 정상 인사
+          scenario = 'greeting'
+        }
+
+        setVnScenario(scenario)
         setVnStep(0)
         setVnVisible(true)
+
+        // 현재 접속 날짜 저장
+        localStorage.setItem('lastAccessDate', todayStr)
       })
       .finally(() => setLoading(false))
   }, [])
@@ -340,7 +414,11 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
 
         {/* ── Main: Full-height Calendar ── */}
         <div className="dashboard-main" ref={mainRef} style={{ paddingBottom: calendarPushUp > 0 ? `${calendarPushUp}px` : undefined }}>
-         <div className="calendar-content" ref={calendarRef}>
+         <div
+           className="calendar-content"
+           ref={calendarRef}
+           style={vnVisible ? { filter: 'blur(5px)', pointerEvents: 'none' } : undefined}
+         >
           {/* Month navigation */}
           <div className="calendar-header-row">
             <div className="calendar-month-label">

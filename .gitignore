@@ -23,3 +23,10 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+.env.local
+.env.*.local

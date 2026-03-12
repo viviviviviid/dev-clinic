@@ -226,7 +226,9 @@ export default function App() {
   }
 
   // No project loaded today — show dashboard screen
-  if (!projectStatus?.loaded) {
+  // 테스트 모드(?test) 또는 프로젝트 미로드 상태
+  const isTestMode = new URLSearchParams(window.location.search).has('test')
+  if (!projectStatus?.loaded || isTestMode) {
     return <DashboardScreen onMissionReady={handleMissionReady} onOpenSettings={() => setShowSettings(true)} />
   }
 

@@ -274,26 +274,15 @@
   z-index: 50;
   cursor: pointer;
   overflow: hidden;
-  /* 병원 배경 — 나중에 background-image로 CG 배경 교체 가능 */
-  background:
-    linear-gradient(180deg,
-      #dbeafe 0%,
-      #eff6ff 40%,
-      #f0f6ff 70%,
-      #e8f0fe 100%
-    );
+  /* 반투명 검정 오버레이 */
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
-/* 배경 장식 — 병원 창문 빛 느낌 */
+/* 배경 장식 — 제거됨 (블러 오버레이로 대체) */
 .vn-intro::before {
-  content: '';
-  position: absolute;
-  top: -10%;
-  right: 10%;
-  width: 35%;
-  height: 70%;
-  background: radial-gradient(ellipse, rgba(255,255,255,0.55) 0%, transparent 70%);
-  pointer-events: none;
+  display: none;
 }
 
 .vn-fade-in {
@@ -312,10 +301,10 @@
   to   { opacity: 0; }
 }
 
-/* ── 캐릭터 이미지 (우측, 상반신 위주) ── */
+/* ── 캐릭터 이미지 (좌측, 상반신 위주) ── */
 .vn-character {
   position: absolute;
-  right: 8%;
+  left: 8%;
   bottom: 140px;   /* 대사창 높이만큼 여백 */
   height: 82%;
   max-height: 680px;
@@ -934,8 +923,11 @@
   .calendar-content { max-width: 100%; }
   .calendar-month-label { font-size: 1.2rem; }
 
-  .vn-intro { left: 56px; }
-  .vn-character { right: 2%; height: 70%; bottom: 120px; }
+  .vn-intro {
+    left: 56px;
+    background: rgba(0, 0, 0, 0.4);
+  }
+  .vn-character { left: 2%; height: 70%; bottom: 120px; }
   .vn-dialogue { padding: 1rem 1.25rem 1.5rem; }
   .vn-name-tag { left: 1.25rem; }
   .vn-dialogue-text { font-size: 0.9375rem; }
