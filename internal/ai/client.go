@@ -556,31 +556,33 @@ JSON만 출력하세요. 마크다운 코드블록 없이:
 }
 
 type TopicSuggestion struct {
-	Name string `json:"name"`
-	Slug string `json:"slug"`
+	Name       string `json:"name"`
+	Slug       string `json:"slug"`
+	Difficulty string `json:"difficulty"` // "상" | "중" | "하"
 }
 
 func (c *Client) GenerateDailyTopics(ctx context.Context, language, skillLevel string) ([]TopicSuggestion, error) {
 	skillLevelKr := skillLevelToKorean(skillLevel)
 
-	prompt := fmt.Sprintf(`코딩 튜터 앱에서 오늘 학습할 주제 3개를 추천해주세요.
+	prompt := fmt.Sprintf(`코딩 튜터 앱에서 오늘 학습할 주제 3개를 추천해주세요. 각각 상/중/하 난이도로 하나씩 추천하세요.
 
 언어: %s
 학습 수준: %s
 
 각 주제는:
 - 1~2시간 안에 완성할 수 있는 실용적인 예제 기반
-- 학습 수준에 적합한 난이도
 - HOLE(구현 과제)과 BUG(디버깅 과제)를 만들 수 있는 내용
+- 이전에 자주 하지 않는 새로운 주제 위주로 선정
 
 JSON 배열만 출력하세요. 마크다운 코드블록 없이:
 [
-  {"name": "주제 이름 (한국어)", "slug": "EnglishSlug"},
-  {"name": "...", "slug": "..."},
-  {"name": "...", "slug": "..."}
+  {"name": "주제 이름 (한국어)", "slug": "EnglishSlug", "difficulty": "하"},
+  {"name": "...", "slug": "...", "difficulty": "중"},
+  {"name": "...", "slug": "...", "difficulty": "상"}
 ]
 
-slug는 영문 파스칼케이스 또는 단어 하나로, 디렉토리명에 사용됩니다.`, language, skillLevelKr)
+slug는 영문 파스칼케이스 또는 단어 하나로, 디렉토리명에 사용됩니다.
+difficulty는 반드시 "하", "중", "상" 중 하나여야 합니다.`, language, skillLevelKr)
 
 	model := config.Global.Gemini.Model
 	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)

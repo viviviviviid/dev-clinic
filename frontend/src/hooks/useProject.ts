@@ -14,6 +14,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 export interface TopicSuggestion {
   name: string
   slug: string
+  difficulty: '상' | '중' | '하'
 }
 
 export function useProject() {

@@ -70,12 +70,16 @@ func GetDaily(c *gin.Context) {
 func GetDailyHistory(c *gin.Context) {
 	userID := c.GetString("user_id")
 
+	dateFilter := c.Query("date")
+	var query string
+	if dateFilter != "" {
+		query = fmt.Sprintf("daily_missions?user_id=eq.%s&date=eq.%s&order=created_at.asc&select=*", userID, dateFilter)
+	} else {
+		query = fmt.Sprintf("daily_missions?user_id=eq.%s&order=date.desc,created_at.asc&select=*", userID)
+	}
+
 	var missions []DailyMission
-	err := supabase.Get(
-		fmt.Sprintf("daily_missions?user_id=eq.%s&order=date.desc,created_at.asc&select=*", userID),
-		&missions,
-	)
-	if err != nil {
+	if err := supabase.Get(query, &missions); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
