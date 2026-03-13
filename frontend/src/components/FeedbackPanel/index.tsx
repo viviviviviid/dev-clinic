@@ -23,8 +23,11 @@ export default function FeedbackPanel() {
     lastSync,
     stepComplete,
     setStepComplete,
+    projectComplete,
+    setProjectComplete,
     projectStatus,
     setProjectStatus,
+    clearProjectStatus,
     skillLevel,
     setQuizData,
     clearSolvedHoles,
@@ -40,7 +43,7 @@ export default function FeedbackPanel() {
     snapshots,
     setSnapshots,
   } = useStore()
-  const { advanceToNextStep, refreshFileTree, loadQuizData, sendChat, listSnapshots, restoreSnapshot } = useProject()
+  const { advanceToNextStep, completeMission, refreshFileTree, loadQuizData, sendChat, listSnapshots, restoreSnapshot } = useProject()
 
   async function handleNextStep() {
     setAdvancing(true)
@@ -48,6 +51,8 @@ export default function FeedbackPanel() {
       const data = await advanceToNextStep()
       if (data.done) {
         setStepComplete(false)
+        await completeMission()
+        setProjectComplete(true)
         return
       }
       if (data.loaded) {
@@ -186,6 +191,25 @@ export default function FeedbackPanel() {
           <span className="panel-sync">{formatTime(lastSync)}</span>
         )}
       </div>
+
+      {projectComplete && (
+        <div className="project-complete-banner">
+          <div className="project-complete-icon">🎉</div>
+          <div className="project-complete-text">
+            <strong>모든 단계를 완료했습니다!</strong>
+            <p>수고하셨습니다. 전체 커리큘럼을 성공적으로 마쳤습니다.</p>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="next-step-btn"
+              onClick={() => { setProjectComplete(false); clearProjectStatus() }}
+            >
+              대시보드로 →
+            </button>
+            <button onClick={() => setProjectComplete(false)} className="dismiss-btn">닫기</button>
+          </div>
+        </div>
+      )}
 
       {stepComplete && testResult?.passed && (
         <div className="step-complete-banner">

@@ -539,7 +539,9 @@ export default function Editor() {
   // Concept panel
   const [showConcept, setShowConcept] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
+  const [isTesting, setIsTesting] = useState(false)
   const [runOutput, setRunOutput] = useState<string[]>([])
+  const [outputTitle, setOutputTitle] = useState('실행 결과')
   const [showOutput, setShowOutput] = useState(false)
   const outputEndRef = useRef<HTMLDivElement>(null)
 
@@ -609,20 +611,21 @@ export default function Editor() {
     if (openFile) await writeFile(openFile, newContent)
   }
 
-  async function handleRun() {
-    if (isRunning) return
-    setIsRunning(true)
+  async function streamOutput(endpoint: string, title: string, setActive: (v: boolean) => void) {
+    setActive(true)
     setRunOutput([])
+    setOutputTitle(title)
     setShowOutput(true)
 
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const runHeaders: Record<string, string> = {}
       if (session?.access_token) runHeaders['Authorization'] = `Bearer ${session.access_token}`
-      const response = await fetch('/api/run', { headers: runHeaders })
+      const response = await fetch(endpoint, { headers: runHeaders })
+      console.log(`[streamOutput] ${endpoint} → status=${response.status}, ok=${response.ok}`)
       if (!response.ok || !response.body) {
-        setRunOutput(['[오류] 실행 요청 실패'])
-        setIsRunning(false)
+        setRunOutput([`[오류] 요청 실패 (${response.status})`])
+        setActive(false)
         return
       }
 
@@ -635,13 +638,14 @@ export default function Editor() {
         if (done) break
         buffer += decoder.decode(value, { stream: true })
 
-        // SSE 파싱: \n\n 구분
         const chunks = buffer.split('\n\n')
         buffer = chunks.pop() ?? ''
 
         for (const chunk of chunks) {
+          if (!chunk.trim()) continue
+          console.log('[sse chunk]', JSON.stringify(chunk))
           if (chunk.startsWith('event: done')) {
-            setIsRunning(false)
+            setActive(false)
             continue
           }
           const match = chunk.match(/^data: (.*)$/m)
@@ -653,8 +657,19 @@ export default function Editor() {
     } catch (e: any) {
       setRunOutput((prev) => [...prev, '[오류] ' + e.message])
     } finally {
-      setIsRunning(false)
+      setActive(false)
     }
+  }
+
+  async function handleRun() {
+    if (isRunning || isTesting) return
+    streamOutput('/api/run', '실행 결과', setIsRunning)
+  }
+
+  async function handleTest() {
+    if (isRunning || isTesting) return
+    console.log('[test] button clicked, starting streamOutput')
+    streamOutput('/api/test', '테스트 결과', setIsTesting)
   }
 
   if (!openFile) {
@@ -703,13 +718,25 @@ export default function Editor() {
           <button
             className={`run-btn ${isRunning ? 'running' : ''}`}
             onClick={handleRun}
-            disabled={isRunning}
+            disabled={isRunning || isTesting}
             title="코드 실행 (▶)"
           >
             {isRunning ? (
               <><span className="run-spinner" /> 실행 중...</>
             ) : (
               <>▶ 실행</>
+            )}
+          </button>
+          <button
+            className={`run-btn test-btn ${isTesting ? 'running' : ''}`}
+            onClick={handleTest}
+            disabled={isRunning || isTesting}
+            title="테스트 실행"
+          >
+            {isTesting ? (
+              <><span className="run-spinner" /> 테스트 중...</>
+            ) : (
+              <>✓ 테스트</>
             )}
           </button>
           <span
@@ -792,12 +819,12 @@ export default function Editor() {
       {showOutput && (
         <div className="run-output-panel">
           <div className="run-output-header">
-            <span>실행 결과</span>
-            {isRunning && <span className="run-output-running">● 실행 중</span>}
+            <span>{outputTitle}</span>
+            {(isRunning || isTesting) && <span className="run-output-running">● 실행 중</span>}
             <button className="run-output-close" onClick={() => setShowOutput(false)}>✕</button>
           </div>
           <div className="run-output-body">
-            {runOutput.length === 0 && isRunning && (
+            {runOutput.length === 0 && (isRunning || isTesting) && (
               <span className="run-output-waiting">출력 대기 중...</span>
             )}
             {runOutput.map((line, i) => (

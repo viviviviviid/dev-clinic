@@ -87,6 +87,7 @@ interface AppState {
   projectStatus: ProjectStatus | null
   setProjectDir: (dir: string) => void
   setProjectStatus: (status: ProjectStatus) => void
+  clearProjectStatus: () => void
 
   // Files
   fileTree: FileEntry[]
@@ -118,6 +119,10 @@ interface AppState {
   // Step complete
   stepComplete: boolean
   setStepComplete: (v: boolean) => void
+
+  // Project complete (all steps done)
+  projectComplete: boolean
+  setProjectComplete: (v: boolean) => void
 
   // Diagnostics (Problems panel)
   diagnostics: DiagnosticItem[]
@@ -170,6 +175,7 @@ export const useStore = create<AppState>((set, get) => ({
   projectStatus: null,
   setProjectDir: (dir) => set({ projectDir: dir }),
   setProjectStatus: (status) => set({ projectStatus: status }),
+  clearProjectStatus: () => set({ projectStatus: null }),
 
   // Files
   fileTree: [],
@@ -264,6 +270,10 @@ export const useStore = create<AppState>((set, get) => ({
   // Step complete
   stepComplete: false,
   setStepComplete: (v) => set({ stepComplete: v }),
+
+  // Project complete
+  projectComplete: false,
+  setProjectComplete: (v) => set({ projectComplete: v }),
 
   // Diagnostics
   diagnostics: [],

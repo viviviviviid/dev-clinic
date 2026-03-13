@@ -69,6 +69,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const [vnStep, setVnStep] = useState(0)
   const [vnScenario, setVnScenario] = useState<'greeting' | 'same_day_failed' | 'yesterday_failed' | 'streak_failed'>('greeting')
   const [testScenarioIndex, setTestScenarioIndex] = useState(0)
+  const [testModeActive, setTestModeActive] = useState(false)
 
   // VN 시나리오별 대사/이미지 정의
   const vnSequence = {
@@ -95,7 +96,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     if (vnFading) return
     if (vnStep < currentSlides.length - 1) {
       setVnStep(prev => prev + 1)
-    } else if (isTestMode) {
+    } else if (testModeActive) {
       // 테스트 모드: 다음 시나리오로 넘어감
       if (testScenarioIndex < testScenarios.length - 1) {
         const nextScenario = testScenarios[testScenarioIndex + 1]
@@ -105,17 +106,24 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       } else {
         // 모든 시나리오 완료
         setVnFading(true)
-        setTimeout(() => setVnVisible(false), 420)
+        setTimeout(() => {
+          setVnVisible(false)
+          setVnFading(false)
+        }, 420)
       }
     } else {
       setVnFading(true)
-      setTimeout(() => setVnVisible(false), 420)
+      setTimeout(() => {
+        setVnVisible(false)
+        setVnFading(false)
+      }, 420)
     }
   }
 
   const mainRef = useRef<HTMLDivElement>(null)
   const calendarRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const initializerRef = useRef(false)
 
   useEffect(() => {
     if (!todayPanelOpen) {
@@ -141,11 +149,17 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   }, [todayPanelOpen])
 
   useEffect(() => {
+    if (initializerRef.current) return
+    initializerRef.current = true
+
     // 테스트 모드: 바로 첫 시나리오 표시
     if (isTestMode) {
+      setTestModeActive(true)
+      setVnFading(false)
       setVnScenario(testScenarios[0])
       setVnStep(0)
       setVnVisible(true)
+      setTestScenarioIndex(0)
       setLoading(false)
       return
     }
@@ -201,6 +215,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           scenario = 'greeting'
         }
 
+        setVnFading(false)
         setVnScenario(scenario)
         setVnStep(0)
         setVnVisible(true)
@@ -381,6 +396,24 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
 
           <div className="sidebar-settings-btn">
             <div className="nav-item" onClick={onOpenSettings}>⚙ 설정</div>
+            <div
+              className={`nav-item ${testModeActive ? 'active' : ''}`}
+              onClick={() => {
+                const newTestMode = !testModeActive
+                setTestModeActive(newTestMode)
+                if (newTestMode) {
+                  // 테스트 모드 활성화
+                  setVnFading(false)
+                  setVnScenario(testScenarios[0])
+                  setVnStep(0)
+                  setVnVisible(true)
+                  setTestScenarioIndex(0)
+                }
+              }}
+              title="시나리오 테스트 모드"
+            >
+              🧪 테스트
+            </div>
           </div>
         </div>
 
@@ -391,7 +424,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
             onClick={advanceVn}
           >
             {/* 우측 캐릭터 — 이미지 전환 시 key로 재마운트해 애니메이션 재실행 */}
-            <div className="vn-character" key={currentSlide.img}>
+            <div className="vn-character" key={`${vnScenario}-${vnStep}`}>
               <img
                 src={currentSlide.img}
                 alt="간호사"

@@ -233,6 +233,25 @@ func (c *Client) GenerateCurriculum(ctx context.Context, language, topic, skillL
 주제/요청: %s
 학습 수준: %s
 
+━━━ 단계 수 결정 기준 ━━━
+주제의 규모와 복잡도에 따라 단계 수를 자유롭게 결정하세요. 단계 수는 고정이 아닙니다.
+
+- 단순한 개념 실습 (알고리즘 하나, 작은 유틸): 2~3단계
+- 중간 규모 (여러 개념 조합, 작은 서비스): 4~5단계
+- 큰 규모 (완성도 있는 CLI 앱, 미니 서버, 게임 등): 6~8단계
+
+각 단계는 30분~1시간 분량의 작업이어야 합니다.
+억지로 줄이거나 늘리지 말고, 주제에 맞는 자연스러운 분량으로 설계하세요.
+
+━━━ 설계 원칙 ━━━
+이 커리큘럼은 "누적 확장" 방식입니다.
+- 각 스텝은 이전 스텝의 코드 위에 새 기능을 추가합니다.
+- 모든 스텝을 완료하면 하나의 완성된 프로그램이 만들어집니다.
+- 스텝 1의 코드가 마지막 스텝에도 그대로 살아있어야 합니다.
+
+먼저 "최종 완성 프로그램"을 설계한 뒤, 그것을 적절한 수의 단계로 분해하세요.
+각 단계는 새로운 함수/파일을 추가하는 것이 원칙입니다.
+
 아래 형식의 TUTORSYS.md를 생성하세요. 마크다운 코드블록 없이 내용만 출력하세요.
 
 ---
@@ -247,23 +266,34 @@ func (c *Client) GenerateCurriculum(ctx context.Context, language, topic, skillL
 ## 학습 수준
 %s
 
+## 최종 결과물
+[모든 단계를 완료했을 때 완성되는 프로그램 설명.
+- 어떤 기능을 하는 프로그램인지 구체적으로
+- 어떤 함수/파일로 구성되는지 (최종 파일 목록과 각 역할)
+- 어떻게 실행하고 어떤 출력이 나오는지]
+
 ## 개념 설명
-[이 Step에서 다루는 핵심 개념들을 초보자도 이해할 수 있도록 설명.
+[Step 1에서 다루는 핵심 개념들을 초보자도 이해할 수 있도록 설명.
 각 개념마다 "왜 필요한지"와 "어떻게 동작하는지"를 포함.
 코드 예시를 들어 설명해도 좋음. 300자 이상 충분히 작성.]
 
 ## 커리큘럼 단계
-- [ ] Step 1: [단계명]
-- [ ] Step 2: [단계명]
-- [ ] Step 3: [단계명]
+[주제 복잡도에 맞게 2~8개 단계를 자유롭게 작성. 형식 예시:]
+- [ ] Step 1: [단계명 — 이 단계에서 새로 추가하는 것]
+- [ ] Step 2: [단계명 — 이 단계에서 새로 추가하는 것]
+(필요한 만큼 계속 추가)
 
 ## 현재 단계
 Step 1
 
+## 이 단계에서 추가하는 것
+[Step 1에서 새로 만드는 함수/파일 목록과 각각의 역할.
+"이전 단계 없음 — 프로젝트의 기초 뼈대를 만듭니다."]
+
 ## 현재 과제
 ### 구현할 것 (HOLE)
 1. **[파일명] - [함수/구조체명]**: [무엇을 구현해야 하는지 2~3문장 명확히]
-   - 왜 필요한가: [이 구현이 전체 프로그램에서 어떤 역할을 하는지]
+   - 왜 필요한가: [이 구현이 최종 프로그램에서 어떤 역할을 하는지]
    - 단계별 접근: [1단계 → 2단계 → 3단계 순서로 어떻게 작성해야 하는지]
    - 사용할 것: [관련 표준 라이브러리 함수, 타입, 키워드]
 
@@ -273,7 +303,7 @@ Step 1
    - 힌트: [어떤 종류의 오류인지 — 반복 범위? 조건 방향? 연산 순서?]
 
 ## 파일 구성
-- [파일명]: [이 파일의 역할과 구조 설명]
+- [파일명]: [이 파일의 역할과 구조 설명 (Step 1에서 생성되는 파일들)]
 
 ## 진행 기록
 []
@@ -291,14 +321,21 @@ func (c *Client) GenerateCodeFiles(ctx context.Context, tutorContent string, exi
 	existingSection := ""
 	if len(existingFiles) > 0 {
 		var sb strings.Builder
-		sb.WriteString("=== 기존 코드 파일 (학습자가 이전 단계에서 작성한 코드) ===\n")
-		sb.WriteString("기존 파일을 기반으로 다음 단계 코드를 생성할 때 반드시 지켜야 할 규칙:\n\n")
-		sb.WriteString("1. **절대 변경 금지**: 패키지명, 임포트, 타입 선언, 함수 시그니처\n")
-		sb.WriteString("2. **유지 필수**: 학습자가 이미 구현한 코드 (HOLE/BUG 마커가 없는 코드)\n")
-		sb.WriteString("3. **교체 가능**: 기존 HOLE 자리 → 이미 구현됐으므로 완성 코드로 교체\n")
-		sb.WriteString("4. **추가 가능**: 새 단계에 필요한 새 함수/메서드에만 새 HOLE/BUG 추가\n")
-		sb.WriteString("5. **파일 이름 유지**: 기존 파일명 그대로 사용, 새 파일은 추가만 가능\n\n")
-		sb.WriteString("검증: 생성된 코드가 기존 함수 시그니처를 변경하지 않았는지 재확인하세요.\n\n")
+		sb.WriteString("=== 이전 단계 코드 (학습자가 작업 중인 누적 코드베이스) ===\n\n")
+		sb.WriteString("━━━ 이번 단계에서 해야 할 일 ━━━\n\n")
+		sb.WriteString("【STEP 1】 기존 파일의 이전 단계 마커 완성\n")
+		sb.WriteString("  - [TUTOR:HOLE] 마커와 힌트 주석을 제거하고, 그 자리를 완성된 정답 코드로 채우세요.\n")
+		sb.WriteString("  - [TUTOR:BUG] 마커와 힌트 주석을 제거하고, 올바른 코드로 수정하세요.\n")
+		sb.WriteString("  - 학습자가 이미 구현한 코드(마커 없는 코드)는 절대 변경하지 마세요.\n\n")
+		sb.WriteString("【STEP 2】 이번 단계의 새 기능 추가 (TUTORSYS.md \"이 단계에서 추가하는 것\" 참고)\n")
+		sb.WriteString("  - 새 함수/파일 추가가 원칙. 기존 함수 시그니처는 절대 변경 금지.\n")
+		sb.WriteString("  - 새로 추가되는 코드에만 새로운 [TUTOR:HOLE], [TUTOR:BUG] 마커를 삽입하세요.\n")
+		sb.WriteString("  - 기존 파일에 새 함수를 추가할 때도 기존 코드는 그대로 유지하세요.\n\n")
+		sb.WriteString("【STEP 3】 테스트 파일 처리\n")
+		sb.WriteString("  - 기존 테스트(*_test.go, test_*.py 등)는 그대로 유지하세요 (이미 통과하는 테스트들).\n")
+		sb.WriteString("  - 이번 단계의 새 HOLE/BUG에 대한 테스트를 기존 테스트 파일에 추가하세요.\n\n")
+		sb.WriteString("【검증】 기존 함수를 삭제하거나 시그니처를 바꾸지 않았는지 확인하세요.\n\n")
+		sb.WriteString("=== 현재 코드 파일들 ===\n\n")
 		for name, content := range existingFiles {
 			sb.WriteString(fmt.Sprintf("===FILE:%s===\n%s\n===END===\n\n", name, content))
 		}
@@ -395,6 +432,8 @@ TUTORSYS.md의 "## 학습 수준" 값을 반드시 확인하고, 그에 맞게 H
   - Python: test_*.py (unittest 또는 pytest)
   - TypeScript/JavaScript: *.test.ts / *.test.js (jest)
   - Rust: 동일 파일 내 #[cfg(test)] 모듈 또는 tests/integration_test.rs
+- 기존 파일이 있는 경우: 기존 테스트는 유지하고 이번 단계의 새 HOLE/BUG 테스트만 추가
+- 기존 파일이 없는 경우: Step 1의 모든 HOLE/BUG에 대한 테스트 생성
 - 각 HOLE에 대한 테스트: HOLE이 올바르게 구현되면 PASS, 빈 상태(제로값 반환)면 FAIL
 - 각 BUG에 대한 테스트: BUG가 수정되면 PASS, 그대로면 FAIL
 - 테스트 함수명은 TestXxx 형식으로 명확하게 작성하세요
@@ -648,23 +687,40 @@ func (c *Client) ExplainWrongAnswer(ctx context.Context, question, wrongChoice, 
 	return nil
 }
 
-func (c *Client) GenerateNextStep(ctx context.Context, tutorContent, nextStep string) (string, error) {
+func (c *Client) GenerateNextStep(ctx context.Context, tutorContent, nextStep string, currentFiles map[string]string) (string, error) {
+	currentFilesSection := ""
+	if len(currentFiles) > 0 {
+		var sb strings.Builder
+		sb.WriteString("\n=== 현재 코드 상태 (이전 단계까지 누적된 코드) ===\n")
+		for name, content := range currentFiles {
+			sb.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", name, content))
+		}
+		currentFilesSection = sb.String()
+	}
+
 	prompt := fmt.Sprintf(`아래 TUTORSYS.md를 보고, 다음 학습 단계(%s)로 업데이트하세요.
+
+이 커리큘럼은 "누적 확장" 방식입니다.
+- 각 스텝은 이전 스텝의 코드 위에 새 기능을 추가합니다.
+- 이전 단계에서 만든 함수/파일은 그대로 유지되며, 새 기능만 추가됩니다.
 
 기존 TUTORSYS.md:
 %s
-
+%s
 업데이트 규칙:
-1. "## 현재 단계" 값을 "%s"로 변경 (Step N 레이블만, 예: Step 2)
-2. "## 커리큘럼 단계"에서 이전 단계들(현재 단계 이전)을 - [x]로 표시
-3. "## 현재 과제" 섹션을 %s에 맞는 새로운 HOLE과 BUG 과제로 완전히 교체
-   - 구현할 것 (HOLE): 학습자가 직접 구현해야 할 함수/메서드
-   - 찾아서 고칠 것 (BUG): 의도적으로 잘못 작성된 코드
-4. "## 개념 설명" 섹션을 %s에서 다루는 핵심 개념으로 교체 (300자 이상)
-5. "## 학습자 목표", "## 언어 & 환경", "## 학습 수준", "## 파일 구성", "## 진행 기록" 섹션은 그대로 유지
+1. "## 현재 단계" 값을 "%s"로 변경
+2. "## 커리큘럼 단계"에서 완료된 단계들을 - [x]로 표시
+3. "## 이 단계에서 추가하는 것" 섹션을 %s에서 새로 추가되는 함수/파일로 업데이트
+   - 이전 단계에서 이어받는 것(완성된 코드)과 이번에 새로 추가하는 것을 명확히 구분
+4. "## 현재 과제" 섹션을 %s에서 새로 추가되는 코드에 대한 HOLE/BUG로만 업데이트
+   - 이전 단계에서 이미 완성된 함수는 과제에 포함하지 마세요
+   - 이번 단계에서 새로 만드는 함수/기능에만 HOLE/BUG를 설정하세요
+5. "## 개념 설명" 섹션을 %s에서 새로 추가되는 기능의 핵심 개념으로 교체 (300자 이상)
+6. "## 파일 구성" 섹션에 이번 단계에서 추가/수정되는 파일 정보를 반영
+7. "## 최종 결과물", "## 학습자 목표", "## 언어 & 환경", "## 학습 수준", "## 진행 기록" 섹션은 그대로 유지
 
 마크다운 코드블록 없이 TUTORSYS.md 전체 내용만 출력하세요.`,
-		nextStep, tutorContent, nextStep, nextStep, nextStep)
+		nextStep, tutorContent, currentFilesSection, nextStep, nextStep, nextStep, nextStep)
 
 	model := config.Global.Gemini.Model
 	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)

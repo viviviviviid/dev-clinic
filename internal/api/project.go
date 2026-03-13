@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/coding-tutor/internal/ai"
 	"github.com/coding-tutor/internal/project"
 	"github.com/coding-tutor/internal/snapshot"
+	"github.com/coding-tutor/internal/supabase"
 	"github.com/coding-tutor/internal/watcher"
 	"github.com/gin-gonic/gin"
 )
@@ -172,8 +174,13 @@ func findNextStep(content, currentStep string) (string, string) {
 			}
 		}
 	}
+	// currentStep이 "Step 2: 설명" 형태일 수 있으므로 label만 추출해서 비교
+	currentLabel := currentStep
+	if idx := strings.Index(currentStep, ":"); idx > 0 {
+		currentLabel = strings.TrimSpace(currentStep[:idx])
+	}
 	for i, s := range steps {
-		if s.label == currentStep && i+1 < len(steps) {
+		if s.label == currentLabel && i+1 < len(steps) {
 			return steps[i+1].label, steps[i+1].full
 		}
 	}
@@ -198,13 +205,28 @@ func AdvanceToNextStep(c *gin.Context) {
 		return
 	}
 
-	newCurriculum, err := ai.Global.GenerateNextStep(c.Request.Context(), status.Content, nextFull)
+	dir := project.Global.GetDir()
+
+	// 현재 코드 파일 읽기 (소스 + 테스트 모두 포함) — GenerateNextStep과 GenerateCodeFiles에서 사용
+	currentFiles := map[string]string{}
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || e.Name() == "TUTORSYS.md" || e.Name() == "quiz.json" {
+				continue
+			}
+			name := e.Name()
+			data, rerr := os.ReadFile(filepath.Join(dir, name))
+			if rerr == nil {
+				currentFiles[name] = string(data)
+			}
+		}
+	}
+
+	newCurriculum, err := ai.Global.GenerateNextStep(c.Request.Context(), status.Content, nextFull, currentFiles)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	dir := project.Global.GetDir()
 
 	// 현재 단계 스냅샷 저장 (비치명적 — 실패해도 진행)
 	_ = snapshot.Save(dir, status.CurrentStep)
@@ -213,29 +235,6 @@ func AdvanceToNextStep(c *gin.Context) {
 	if err := os.WriteFile(tutorPath, []byte(newCurriculum), 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-
-	// 현재 코드 파일 읽기 (테스트 파일 제외) — 다음 단계 코드 생성 시 기반으로 사용
-	currentFiles := map[string]string{}
-	if entries, err := os.ReadDir(dir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() || e.Name() == "TUTORSYS.md" || e.Name() == "quiz.json" {
-				continue
-			}
-			// 테스트 파일 제외
-			name := e.Name()
-			isTest := strings.HasSuffix(name, "_test.go") ||
-				strings.HasPrefix(name, "test_") ||
-				strings.Contains(name, ".test.") ||
-				strings.Contains(name, ".spec.")
-			if isTest {
-				continue
-			}
-			data, rerr := os.ReadFile(filepath.Join(dir, name))
-			if rerr == nil {
-				currentFiles[name] = string(data)
-			}
-		}
 	}
 
 	files, err := ai.Global.GenerateCodeFiles(c.Request.Context(), newCurriculum, currentFiles)
@@ -268,6 +267,27 @@ func AdvanceToNextStep(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, project.Global.GetStatus())
+}
+
+func CompleteProject(c *gin.Context) {
+	if !project.Global.IsLoaded() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project not loaded"})
+		return
+	}
+	userID := c.GetString("user_id")
+	dir := project.Global.GetDir()
+
+	// daily_missions에서 project_dir 일치하는 미션 status를 completed로 업데이트
+	path := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, dir)
+	if err := supabase.Patch(path, map[string]string{"status": "completed"}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if watcher.Global != nil {
+		watcher.Global.Stop()
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func GetQuiz(c *gin.Context) {

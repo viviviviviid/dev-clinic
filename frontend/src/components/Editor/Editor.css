@@ -132,6 +132,20 @@
   border-color: #238636;
 }
 
+.run-btn.test-btn {
+  background: #1f6feb;
+  border-color: #388bfd;
+}
+
+.run-btn.test-btn:hover:not(:disabled) {
+  background: #388bfd;
+}
+
+.run-btn.test-btn.running {
+  background: #0d2f5e;
+  border-color: #1f6feb;
+}
+
 .run-spinner {
   display: inline-block;
   width: 10px;

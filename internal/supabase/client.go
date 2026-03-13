@@ -64,6 +64,35 @@ func Insert(table string, data interface{}) error {
 	return nil
 }
 
+func Patch(path string, data interface{}) error {
+	body, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	url := config.Global.Supabase.URL + "/rest/v1/" + path
+	req, err := http.NewRequest("PATCH", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("apikey", config.Global.Supabase.ServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+config.Global.Supabase.ServiceRoleKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Prefer", "return=minimal")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("supabase patch error %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
 func Upsert(table string, data interface{}) error {
 	body, err := json.Marshal(data)
 	if err != nil {

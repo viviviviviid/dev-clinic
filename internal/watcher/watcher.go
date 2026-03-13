@@ -216,7 +216,7 @@ func (w *Watcher) snapshot(dir string) error {
 }
 
 func (w *Watcher) run(ctx context.Context, dir string) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {

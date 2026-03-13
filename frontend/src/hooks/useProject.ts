@@ -115,6 +115,14 @@ export function useProject() {
     return res.json()
   }
 
+  async function completeMission() {
+    const res = await fetch('/api/project/complete', {
+      method: 'POST',
+      headers: await authHeaders(),
+    })
+    return res.json()
+  }
+
   async function sendChat(message: string, fileContent: string, chatHistory: ChatMessage[]): Promise<ReadableStream<Uint8Array> | null> {
     const headers = await authHeaders()
     const res = await fetch('/api/chat', {
@@ -138,6 +146,7 @@ export function useProject() {
     confirmDailyMission,
     loadProject,
     advanceToNextStep,
+    completeMission,
     listSnapshots,
     restoreSnapshot,
     sendChat,

@@ -232,6 +232,9 @@
   padding-top: 1rem;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 /* ─── Main Content ───────────────────────── */
@@ -840,7 +843,7 @@
 
 .vn-character {
   position: absolute;
-  left: 10%;
+  left: 2%;
   bottom: 160px;
   height: 85%;
   max-height: 720px;
@@ -894,7 +897,7 @@
   bottom: 2rem;
   left: 50%;
   transform: translateX(-50%);
-  width: min(900px, 90%);
+  width: calc(100% - 20px);
   min-height: 130px;
   padding: 2rem 3rem 2.5rem;
   background: rgba(255, 255, 255, 0.85);
@@ -1034,7 +1037,7 @@
   }
 
   .vn-character {
-    left: -5%;
+    left: -3%;
     height: 60%;
     bottom: 180px;
   }
