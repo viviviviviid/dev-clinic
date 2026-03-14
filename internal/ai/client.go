@@ -600,18 +600,85 @@ type TopicSuggestion struct {
 	Difficulty string `json:"difficulty"` // "상" | "중" | "하"
 }
 
-func (c *Client) GenerateDailyTopics(ctx context.Context, language, skillLevel string) ([]TopicSuggestion, error) {
+// NurseChatMessage is a single turn in a nurse chat conversation.
+type NurseChatMessage struct {
+	Role    string `json:"role"`    // "user" or "nurse"
+	Content string `json:"content"`
+}
+
+func (c *Client) NurseChat(ctx context.Context, message string, history []NurseChatMessage, pastTopics []string, language, skillLevel string, cb StreamCallback) error {
 	skillLevelKr := skillLevelToKorean(skillLevel)
+
+	pastStr := ""
+	if len(pastTopics) > 0 {
+		pastStr = "\n이미 완료한 주제들 (겹치지 않도록): " + strings.Join(pastTopics, ", ")
+	}
+
+	systemPrompt := fmt.Sprintf(`당신은 코딩 재활센터의 담당 간호사입니다. 친절하고 격려적이며 가끔 장난기가 있습니다.
+학습자 언어: %s, 학습 수준: %s%s
+
+학습자와 대화하며 오늘 무엇을 연습하고 싶은지 파악하세요.
+대화는 2~3번이면 충분합니다. 너무 많은 질문을 하지 마세요.
+
+충분한 정보가 모이거나 학습자가 주제 추천을 원하면, 응답 맨 끝에 정확히 이 형식으로 주제 3개를 추가하세요:
+[TOPICS]
+{"name": "주제 이름 (한국어)", "slug": "EnglishSlug", "difficulty": "하"}
+{"name": "주제 이름 (한국어)", "slug": "EnglishSlug", "difficulty": "중"}
+{"name": "주제 이름 (한국어)", "slug": "EnglishSlug", "difficulty": "상"}
+[/TOPICS]
+
+[TOPICS] 블록은 응답 맨 끝에 한 번만 포함하세요. 한국어로만 대화하고, 2~4문장으로 간결하게.`, language, skillLevelKr, pastStr)
+
+	historyStr := ""
+	for _, msg := range history {
+		role := "학습자"
+		if msg.Role == "nurse" {
+			role = "간호사"
+		}
+		historyStr += fmt.Sprintf("%s: %s\n", role, msg.Content)
+	}
+	prompt := historyStr + "학습자: " + message + "\n간호사: "
+
+	cfg := &genai.GenerateContentConfig{
+		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
+	}
+	model := config.Global.Gemini.Model
+	for chunk, err := range c.client.Models.GenerateContentStream(ctx, model, genai.Text(prompt), cfg) {
+		if err != nil {
+			return err
+		}
+		if chunk.Candidates != nil {
+			for _, cand := range chunk.Candidates {
+				if cand.Content != nil {
+					for _, part := range cand.Content.Parts {
+						if part.Text != "" {
+							cb(part.Text)
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Client) GenerateDailyTopics(ctx context.Context, language, skillLevel string, pastTopics []string) ([]TopicSuggestion, error) {
+	skillLevelKr := skillLevelToKorean(skillLevel)
+
+	pastStr := ""
+	if len(pastTopics) > 0 {
+		pastStr = fmt.Sprintf("\n\n이미 완료한 주제들 (겹치지 않도록 완전히 다른 주제 추천):\n%s", strings.Join(pastTopics, ", "))
+	}
 
 	prompt := fmt.Sprintf(`코딩 튜터 앱에서 오늘 학습할 주제 3개를 추천해주세요. 각각 상/중/하 난이도로 하나씩 추천하세요.
 
 언어: %s
-학습 수준: %s
+학습 수준: %s%s
 
 각 주제는:
 - 1~2시간 안에 완성할 수 있는 실용적인 예제 기반
 - HOLE(구현 과제)과 BUG(디버깅 과제)를 만들 수 있는 내용
-- 이전에 자주 하지 않는 새로운 주제 위주로 선정
+- 이미 완료한 주제와 겹치지 않는 새로운 주제
 
 JSON 배열만 출력하세요. 마크다운 코드블록 없이:
 [
@@ -621,7 +688,7 @@ JSON 배열만 출력하세요. 마크다운 코드블록 없이:
 ]
 
 slug는 영문 파스칼케이스 또는 단어 하나로, 디렉토리명에 사용됩니다.
-difficulty는 반드시 "하", "중", "상" 중 하나여야 합니다.`, language, skillLevelKr)
+difficulty는 반드시 "하", "중", "상" 중 하나여야 합니다.`, language, skillLevelKr, pastStr)
 
 	model := config.Global.Gemini.Model
 	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)

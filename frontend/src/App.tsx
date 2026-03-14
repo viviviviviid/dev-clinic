@@ -59,10 +59,9 @@ interface ResizerHandleProps {
 }
 function ResizerHandle({ direction, onMouseDown }: ResizerHandleProps) {
   return (
-    <div
-      className={`resizer resizer-${direction}`}
-      onMouseDown={onMouseDown}
-    />
+    <div className={`resizer resizer-${direction}`} onMouseDown={onMouseDown}>
+      <div className="resizer-grip" />
+    </div>
   )
 }
 
@@ -81,9 +80,17 @@ export default function App() {
 
   // Panel sizes
   const [sidebarWidth, setSidebarWidth] = useState(200)
-  const [feedbackWidth, setFeedbackWidth] = useState(320)
+  const [feedbackWidth, setFeedbackWidth] = useState(() => {
+    const saved = localStorage.getItem('feedbackWidth')
+    if (saved) return Math.max(160, Math.min(600, parseInt(saved)))
+    return Math.max(360, Math.min(600, Math.round(window.innerWidth * 0.28)))
+  })
   const [terminalHeight, setTerminalHeight] = useState(240)
   const [problemsHeight, setProblemsHeight] = useState(180)
+
+  useEffect(() => {
+    localStorage.setItem('feedbackWidth', String(feedbackWidth))
+  }, [feedbackWidth])
 
   const sidebarRef = useRef(sidebarWidth)
   const feedbackRef = useRef(feedbackWidth)
@@ -178,6 +185,11 @@ export default function App() {
     setUserSettingsLocal(settings)
     setUserSettings(settings)
     setShowSettings(false)
+  }
+
+  function handleBackToDashboard() {
+    lspClient.disconnect()
+    setProjectStatus(null)
   }
 
   async function handleMissionReady(projectDir: string, fallbackSkillLevel: string) {
@@ -280,6 +292,7 @@ export default function App() {
           onProblemsToggle={() => setProblemsOpen((v) => !v)}
           problemsOpen={problemsOpen}
           onSettingsOpen={() => setShowSettings(true)}
+          onBackToDashboard={handleBackToDashboard}
           userEmail={user.email}
         />
       </div>
@@ -293,10 +306,11 @@ interface StatusBarProps {
   onProblemsToggle: () => void
   problemsOpen: boolean
   onSettingsOpen: () => void
+  onBackToDashboard: () => void
   userEmail?: string
 }
 
-function StatusBar({ onTerminalToggle, terminalOpen, onProblemsToggle, problemsOpen, onSettingsOpen, userEmail }: StatusBarProps) {
+function StatusBar({ onTerminalToggle, terminalOpen, onProblemsToggle, problemsOpen, onSettingsOpen, onBackToDashboard, userEmail }: StatusBarProps) {
   const { projectStatus, lastSync, isStreaming, skillLevel, diagnostics } = useStore()
 
   const errorCount = diagnostics.filter(d => d.severity === 1).length
@@ -308,6 +322,9 @@ function StatusBar({ onTerminalToggle, terminalOpen, onProblemsToggle, problemsO
 
   return (
     <div className="statusbar">
+      <button className="statusbar-lobby-btn" onClick={onBackToDashboard} title="로비로 돌아가기">
+        🏥 로비
+      </button>
       <span className="statusbar-item lang">{projectStatus?.language || '—'}</span>
       <span className="statusbar-item step">{projectStatus?.currentStep || '—'}</span>
       {skillLevel && (

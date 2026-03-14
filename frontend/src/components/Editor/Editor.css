@@ -883,3 +883,62 @@
 
 .write-submit-btn:hover:not(:disabled) { opacity: 0.85; }
 .write-submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Nurse explanation VN overlay ── */
+.nurse-explanation-overlay {
+  position: fixed;
+  bottom: 80px;
+  right: 10px;
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  max-width: 380px;
+  pointer-events: auto;
+  animation: nurseSlideIn 0.3s ease;
+}
+
+@keyframes nurseSlideIn {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+.nurse-overlay-character {
+  flex-shrink: 0;
+  width: 120px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.nurse-overlay-character img {
+  width: 120px;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 16px rgba(0,0,0,0.5));
+}
+
+.nurse-vn-dialogue {
+  flex: 1;
+  min-width: 0;
+}
+
+.nurse-dialogue-text {
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.nurse-close-btn {
+  margin-top: 8px;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 6px;
+  color: #e6edf3;
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.nurse-close-btn:hover {
+  background: rgba(255,255,255,0.22);
+}

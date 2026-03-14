@@ -239,8 +239,11 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
   updateTabContent: (path, content) => {
-    const { openTabs } = get()
-    set({ openTabs: openTabs.map(t => t.path === path ? { ...t, content } : t) })
+    const { openTabs, openFile } = get()
+    set({
+      openTabs: openTabs.map(t => t.path === path ? { ...t, content } : t),
+      ...(openFile === path ? { openFileContent: content } : {}),
+    })
   },
 
   // Feedback

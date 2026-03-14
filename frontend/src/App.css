@@ -92,11 +92,39 @@ body {
 .resizer-horizontal {
   width: 4px;
   cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .resizer-vertical {
   height: 4px;
   cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.resizer-grip {
+  pointer-events: none;
+  border-radius: 2px;
+  background: #444d56;
+  transition: background 0.15s;
+}
+
+.resizer-horizontal .resizer-grip {
+  width: 2px;
+  height: 24px;
+}
+
+.resizer-vertical .resizer-grip {
+  width: 24px;
+  height: 2px;
+}
+
+.resizer:hover .resizer-grip,
+.resizer:active .resizer-grip {
+  background: #58a6ff;
 }
 
 .statusbar {
@@ -159,6 +187,26 @@ body {
 .statusbar-item.user-email {
   font-size: 11px;
   color: #6e7681;
+}
+
+.statusbar-lobby-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 6px;
+  transition: all 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.statusbar-lobby-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e6edf3;
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .statusbar-icon-btn {

@@ -123,12 +123,46 @@ export function useProject() {
     return res.json()
   }
 
+  async function deleteProject(projectDir: string) {
+    const res = await fetch('/api/project', {
+      method: 'DELETE',
+      headers: await authHeaders(),
+      body: JSON.stringify({ project_dir: projectDir }),
+    })
+    return res.json()
+  }
+
+  async function reloadOpenTabs() {
+    const { openTabs } = useStore.getState()
+    for (const tab of openTabs) {
+      try {
+        const content = await readFile(tab.path)
+        useStore.getState().updateTabContent(tab.path, content)
+      } catch { /* deleted files are ignored */ }
+    }
+  }
+
   async function sendChat(message: string, fileContent: string, chatHistory: ChatMessage[]): Promise<ReadableStream<Uint8Array> | null> {
     const headers = await authHeaders()
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers,
       body: JSON.stringify({ message, fileContent, chatHistory }),
+    })
+    if (!res.ok || !res.body) return null
+    return res.body
+  }
+
+  async function nurseChat(
+    message: string,
+    history: { role: string; content: string }[],
+    pastTopics: string[],
+  ): Promise<ReadableStream<Uint8Array> | null> {
+    const headers = await authHeaders()
+    const res = await fetch('/api/daily/nurse-chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message, history, pastTopics }),
     })
     if (!res.ok || !res.body) return null
     return res.body
@@ -147,8 +181,11 @@ export function useProject() {
     loadProject,
     advanceToNextStep,
     completeMission,
+    deleteProject,
+    reloadOpenTabs,
     listSnapshots,
     restoreSnapshot,
     sendChat,
+    nurseChat,
   }
 }

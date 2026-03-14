@@ -227,6 +227,25 @@ class LspClient {
     return result as LspTextEdit[]
   }
 
+  async references(
+    filePath: string,
+    line: number,
+    char: number,
+    includeDeclaration = false,
+  ): Promise<Location[] | null> {
+    const uri = `file://${filePath}`
+    const result = await Promise.race([
+      this.request('textDocument/references', {
+        textDocument: { uri },
+        position: { line, character: char },
+        context: { includeDeclaration },
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+    ])
+    if (!result) return null
+    return result as Location[]
+  }
+
   async hover(
     filePath: string,
     line: number,
@@ -254,6 +273,7 @@ class LspClient {
             relatedInformation: false,
           },
           definition: {},
+          references: {},
           hover: {},
           formatting: {},
           completion: {

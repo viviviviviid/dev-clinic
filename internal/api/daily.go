@@ -58,7 +58,19 @@ func GetDaily(c *gin.Context) {
 		return
 	}
 
-	topics, err := ai.Global.GenerateDailyTopics(c.Request.Context(), settings[0].Language, settings[0].SkillLevel)
+	// Fetch all history to avoid repeating past topics
+	var allHistory []DailyMission
+	supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&select=topic", userID), &allHistory)
+	pastTopics := make([]string, 0, len(allHistory))
+	seen := map[string]bool{}
+	for _, m := range allHistory {
+		if !seen[m.Topic] {
+			seen[m.Topic] = true
+			pastTopics = append(pastTopics, m.Topic)
+		}
+	}
+
+	topics, err := ai.Global.GenerateDailyTopics(c.Request.Context(), settings[0].Language, settings[0].SkillLevel, pastTopics)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -157,6 +169,13 @@ func ConfirmDaily(c *gin.Context) {
 		created = append(created, name)
 	}
 
+	// Run go mod init/tidy for Go projects (non-fatal)
+	if s.Language == "go" {
+		if merr := ensureGoMod(projectDir); merr != nil {
+			fmt.Printf("go mod: %v\n", merr)
+		}
+	}
+
 	// Generate quiz for newbie
 	if s.SkillLevel == "newbie" {
 		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), curriculum, files)
@@ -191,4 +210,79 @@ func ConfirmDaily(c *gin.Context) {
 		"project_dir": projectDir,
 		"files":       created,
 	})
+}
+
+type NurseChatReq struct {
+	Message    string                `json:"message"`
+	History    []ai.NurseChatMessage `json:"history"`
+	PastTopics []string              `json:"pastTopics"`
+}
+
+// NurseChatHandler streams nurse chat responses.
+// POST /api/daily/nurse-chat
+func NurseChatHandler(c *gin.Context) {
+	userID := c.GetString("user_id")
+
+	var req NurseChatReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if ai.Global == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI not initialized"})
+		return
+	}
+
+	var settings []UserSettings
+	if err := supabase.Get(
+		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID),
+		&settings,
+	); err != nil || len(settings) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user settings not found"})
+		return
+	}
+
+	// If caller didn't supply past topics, fetch from DB
+	if len(req.PastTopics) == 0 {
+		var allHistory []DailyMission
+		supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&select=topic", userID), &allHistory)
+		seen := map[string]bool{}
+		for _, m := range allHistory {
+			if !seen[m.Topic] {
+				seen[m.Topic] = true
+				req.PastTopics = append(req.PastTopics, m.Topic)
+			}
+		}
+	}
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	sendChunk := func(text string) {
+		data, _ := json.Marshal(map[string]string{"text": text})
+		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	err := ai.Global.NurseChat(
+		c.Request.Context(),
+		req.Message, req.History, req.PastTopics,
+		settings[0].Language, settings[0].SkillLevel,
+		func(chunk string) { sendChunk(chunk) },
+	)
+	if err != nil {
+		sendChunk("죄송해요, 지금은 대화가 어려워요: " + err.Error())
+	}
+
+	fmt.Fprintf(c.Writer, "event: done\ndata: {}\n\n")
+	flusher.Flush()
 }

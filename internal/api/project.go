@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/coding-tutor/internal/ai"
 	"github.com/coding-tutor/internal/project"
@@ -15,6 +18,38 @@ import (
 	"github.com/coding-tutor/internal/watcher"
 	"github.com/gin-gonic/gin"
 )
+
+func ensureGoMod(dir string) error {
+	goModPath := filepath.Join(dir, "go.mod")
+	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
+		moduleName := filepath.Base(dir)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "go", "mod", "init", moduleName)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("go mod init: %w: %s", err, out)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("go mod tidy: %w: %s", err, out)
+	}
+	return nil
+}
+
+func hasGoFiles(files map[string]string) bool {
+	for name := range files {
+		if strings.HasSuffix(name, ".go") {
+			return true
+		}
+	}
+	return false
+}
 
 func GetProjectStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, project.Global.GetStatus())
@@ -94,6 +129,13 @@ func ConfirmProject(c *gin.Context) {
 			return
 		}
 		created = append(created, name)
+	}
+
+	// Run go mod init/tidy for Go projects (non-fatal)
+	if hasGoFiles(files) {
+		if err := ensureGoMod(req.Dir); err != nil {
+			fmt.Printf("go mod: %v\n", err)
+		}
 	}
 
 	// Generate quiz data for newbie level
@@ -259,6 +301,13 @@ func AdvanceToNextStep(c *gin.Context) {
 		}
 	}
 
+	// Run go mod tidy for Go projects (non-fatal)
+	if status.Language == "go" {
+		if err := ensureGoMod(dir); err != nil {
+			fmt.Printf("go mod: %v\n", err)
+		}
+	}
+
 	project.Global.Set(dir, newCurriculum)
 
 	if err := watcher.Start(dir); err != nil {
@@ -348,4 +397,44 @@ func ListSnapshots(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"snapshots": labels})
+}
+
+type DeleteProjectReq struct {
+	ProjectDir string `json:"project_dir"`
+}
+
+func DeleteProject(c *gin.Context) {
+	userID := c.GetString("user_id")
+	var req DeleteProjectReq
+	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectDir == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_dir required"})
+		return
+	}
+
+	// Security: must be within user's base_dir
+	var settings []UserSettings
+	if err := supabase.Get(fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID), &settings); err != nil || len(settings) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user settings not found"})
+		return
+	}
+	if !strings.HasPrefix(req.ProjectDir, settings[0].BaseDir) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	// Stop watcher if it's running on this project
+	if watcher.Global != nil {
+		watcher.Global.Stop()
+	}
+
+	// Remove files
+	if err := os.RemoveAll(req.ProjectDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Remove from DB (non-fatal)
+	_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, req.ProjectDir))
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

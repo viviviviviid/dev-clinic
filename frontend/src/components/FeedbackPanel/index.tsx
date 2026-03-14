@@ -43,7 +43,7 @@ export default function FeedbackPanel() {
     snapshots,
     setSnapshots,
   } = useStore()
-  const { advanceToNextStep, completeMission, refreshFileTree, loadQuizData, sendChat, listSnapshots, restoreSnapshot } = useProject()
+  const { advanceToNextStep, completeMission, refreshFileTree, reloadOpenTabs, loadQuizData, sendChat, listSnapshots, restoreSnapshot } = useProject()
 
   async function handleNextStep() {
     setAdvancing(true)
@@ -59,6 +59,7 @@ export default function FeedbackPanel() {
         setProjectStatus(data)
         clearSolvedHoles()
         await refreshFileTree(data.dir)
+        await reloadOpenTabs()
         if (skillLevel === 'newbie') {
           const quiz = await loadQuizData()
           setQuizData(quiz)
@@ -80,9 +81,10 @@ export default function FeedbackPanel() {
     setShowSnapshotMenu(false)
     try {
       await restoreSnapshot(step)
-      // 파일 트리 갱신
+      // 파일 트리 + 탭 내용 갱신
       if (projectStatus?.dir) {
         await refreshFileTree(projectStatus.dir)
+        await reloadOpenTabs()
       }
     } catch (e) {
       console.error('Restore snapshot error:', e)

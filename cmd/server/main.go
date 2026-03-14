@@ -55,6 +55,7 @@ func main() {
 		apiGroup.GET("/daily", auth, api.GetDaily)
 		apiGroup.GET("/daily/history", auth, api.GetDailyHistory)
 		apiGroup.POST("/daily/confirm", auth, api.ConfirmDaily)
+		apiGroup.POST("/daily/nurse-chat", auth, api.NurseChatHandler)
 
 		// Filesystem
 		apiGroup.GET("/fs/list", auth, api.ListDir)
@@ -68,6 +69,7 @@ func main() {
 		apiGroup.POST("/project/confirm", auth, api.ConfirmProject)
 		apiGroup.POST("/project/load", auth, api.LoadProject)
 		apiGroup.POST("/project/nextstep", auth, api.AdvanceToNextStep)
+		apiGroup.DELETE("/project", auth, api.DeleteProject)
 		apiGroup.POST("/project/complete", auth, api.CompleteProject)
 		apiGroup.GET("/project/snapshots", auth, api.ListSnapshots)
 		apiGroup.POST("/project/snapshot/restore", auth, api.RestoreSnapshot)

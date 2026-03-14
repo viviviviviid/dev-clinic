@@ -4,6 +4,11 @@ import type { TopicSuggestion } from '../../hooks/useProject'
 import { useStore } from '../../store'
 import './Dashboard.css'
 
+interface NurseChatMsg {
+  role: 'user' | 'nurse'
+  content: string
+}
+
 interface Props {
   onMissionReady: (projectDir: string, skillLevel: string) => void
   onOpenSettings: () => void
@@ -36,7 +41,7 @@ function getFirstDayOfWeek(year: number, month: number) {
 }
 
 export default function DashboardScreen({ onMissionReady, onOpenSettings }: Props) {
-  const { getDailyMission, getDailyHistory, confirmDailyMission, loadProject } = useProject()
+  const { getDailyMission, getDailyHistory, confirmDailyMission, loadProject, deleteProject, nurseChat } = useProject()
   const { userSettings } = useStore()
 
   const today = new Date()
@@ -54,22 +59,32 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const [topics, setTopics] = useState<TopicSuggestion[]>([])
   const [todayMissions, setTodayMissions] = useState<MissionRecord[]>([])
   const [allHistory, setAllHistory] = useState<MissionRecord[]>([])
-  const [customTopic, setCustomTopic] = useState('')
-  const [customSlug, setCustomSlug] = useState('')
   const [loading, setLoading] = useState(true)
   const [confirming, setConfirming] = useState(false)
   const [loadingMissionId, setLoadingMissionId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [selectedDate, setSelectedDate] = useState<string>(todayStr)
   const [currentMonth, setCurrentMonth] = useState({ year: today.getFullYear(), month: today.getMonth() })
-  const [todayPanelOpen, setTodayPanelOpen] = useState(false)
-  const [calendarPushUp, setCalendarPushUp] = useState(0)
   const [vnVisible, setVnVisible] = useState(false)
   const [vnFading, setVnFading] = useState(false)
   const [vnStep, setVnStep] = useState(0)
   const [vnScenario, setVnScenario] = useState<'greeting' | 'same_day_failed' | 'yesterday_failed' | 'streak_failed'>('greeting')
   const [testScenarioIndex, setTestScenarioIndex] = useState(0)
   const [testModeActive, setTestModeActive] = useState(false)
+  const [hoveringMissionId, setHoveringMissionId] = useState<string | null>(null)
+
+  // Nurse chat state
+  const [nurseChatVisible, setNurseChatVisible] = useState(false)
+  const [nurseChatFading, setNurseChatFading] = useState(false)
+  const [nurseChatHistory, setNurseChatHistory] = useState<NurseChatMsg[]>([])
+  const [nurseChatInput, setNurseChatInput] = useState('')
+  const [nurseChatLoading, setNurseChatLoading] = useState(false)
+  const [nurseChatSuggestedTopics, setNurseChatSuggestedTopics] = useState<TopicSuggestion[]>([])
+  const [nurseChatMode, setNurseChatMode] = useState<'chat' | 'choice' | 'mission-select'>('chat')
+  const [nurseMissionSelIdx, setNurseMissionSelIdx] = useState(0)
+  const [pastTopics, setPastTopics] = useState<string[]>([])
+  const nurseChatBottomRef = useRef<HTMLDivElement>(null)
+  const nurseChatInputRef = useRef<HTMLInputElement>(null)
 
   // VN 시나리오별 대사/이미지 정의
   const vnSequence = {
@@ -116,37 +131,167 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       setTimeout(() => {
         setVnVisible(false)
         setVnFading(false)
+        if (!testModeActive) {
+          setNurseChatVisible(true)
+          if (todayMissions.length > 0) {
+            // 오늘 미션 있음 → 선택 모드
+            setNurseChatMode('choice')
+            setNurseChatHistory([{
+              role: 'nurse',
+              content: `오늘 이미 훈련이 ${todayMissions.length}개 있네요! 기존 훈련을 계속할까요, 아니면 새로운 걸 만들어볼까요?`,
+            }])
+          } else {
+            // 오늘 미션 없음 → 대화로 추천
+            setNurseChatMode('chat')
+            sendNurseMessage('__init__', [])
+          }
+        }
       }, 420)
     }
   }
 
-  const mainRef = useRef<HTMLDivElement>(null)
-  const calendarRef = useRef<HTMLDivElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-  const initializerRef = useRef(false)
+  function parseTopicsFromText(text: string): TopicSuggestion[] {
+    const match = text.match(/\[TOPICS\]([\s\S]*?)\[\/TOPICS\]/)
+    if (!match) return []
+    const lines = match[1].trim().split('\n').filter(l => l.trim().startsWith('{'))
+    const result: TopicSuggestion[] = []
+    for (const line of lines) {
+      try {
+        const t = JSON.parse(line.trim())
+        if (t.name && t.slug && t.difficulty) result.push(t)
+      } catch { /* skip */ }
+    }
+    return result
+  }
 
-  useEffect(() => {
-    if (!todayPanelOpen) {
-      setCalendarPushUp(0)
+  async function sendNurseMessage(userMsg: string, currentHistory: NurseChatMsg[]) {
+    setNurseChatLoading(true)
+    const isInit = userMsg === '__init__'
+
+    const histForApi = isInit ? [] : currentHistory
+
+    const stream = await nurseChat(
+      isInit ? '안녕하세요! 오늘 어떤 훈련을 할까요?' : userMsg,
+      histForApi,
+      pastTopics,
+    )
+
+    if (!stream) {
+      setNurseChatLoading(false)
       return
     }
-    requestAnimationFrame(() => {
-      const panel = panelRef.current
-      const main = mainRef.current
-      const calendar = calendarRef.current
-      if (!panel || !main || !calendar) return
 
-      const panelH = panel.offsetHeight
-      const needed = panelH + 10
-      const mainH = main.clientHeight
-      const calH = calendar.offsetHeight
+    let nurseReply = ''
+    const newHistory: NurseChatMsg[] = isInit
+      ? []
+      : [...currentHistory, { role: 'user' as const, content: userMsg }]
 
-      // 메인 영역에 달력 + 패널 + 여백이 들어갈 공간이 있을 때만 밀어올림
-      if (mainH >= calH + needed + 32) {
-        setCalendarPushUp(needed)
+    setNurseChatHistory([...newHistory, { role: 'nurse', content: '' }])
+
+    const reader = stream.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const { text } = JSON.parse(line.slice(6))
+            if (text) {
+              nurseReply += text
+              setNurseChatHistory([...newHistory, { role: 'nurse', content: nurseReply }])
+            }
+          } catch { /* skip */ }
+        }
       }
-    })
-  }, [todayPanelOpen])
+    }
+
+    const suggested = parseTopicsFromText(nurseReply)
+    if (suggested.length > 0) {
+      setNurseChatSuggestedTopics(suggested)
+    }
+
+    const finalHistory: NurseChatMsg[] = [...newHistory, { role: 'nurse', content: nurseReply }]
+    setNurseChatHistory(finalHistory)
+    setNurseChatLoading(false)
+    setTimeout(() => {
+      nurseChatBottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      nurseChatInputRef.current?.focus()
+    }, 50)
+  }
+
+  function handleNurseChatSubmit() {
+    const msg = nurseChatInput.trim()
+    if (!msg || nurseChatLoading) return
+    setNurseChatInput('')
+    setNurseChatSuggestedTopics([])
+    sendNurseMessage(msg, nurseChatHistory)
+  }
+
+  function closeNurseChat() {
+    setNurseChatFading(true)
+    setTimeout(() => {
+      setNurseChatVisible(false)
+      setNurseChatFading(false)
+      setNurseChatHistory([])
+      setNurseChatSuggestedTopics([])
+      setNurseChatMode('chat')
+      setNurseMissionSelIdx(0)
+    }, 300)
+  }
+
+  function confirmNurseTopic(t: TopicSuggestion) {
+    closeNurseChat()
+    setTimeout(() => handleCreateNewMission(t.name, t.slug), 350)
+  }
+
+  const mainRef = useRef<HTMLDivElement>(null)
+  const calendarRef = useRef<HTMLDivElement>(null)
+  const initializerRef = useRef(false)
+
+  // 키보드: mission-select 모드
+  useEffect(() => {
+    if (!nurseChatVisible || nurseChatMode !== 'mission-select') return
+    function handler(e: KeyboardEvent) {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setNurseMissionSelIdx(prev => Math.max(0, prev - 1))
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setNurseMissionSelIdx(prev => Math.min(todayMissions.length - 1, prev + 1))
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        const m = todayMissions[nurseMissionSelIdx]
+        if (m) { closeNurseChat(); setTimeout(() => handleLoadMission(m), 350) }
+      } else if (e.key === 'Escape') {
+        setNurseChatMode('choice')
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [nurseChatVisible, nurseChatMode, nurseMissionSelIdx, todayMissions])
+
+  // 키보드: choice 모드 (1=기존, 2=새로운)
+  useEffect(() => {
+    if (!nurseChatVisible || nurseChatMode !== 'choice') return
+    function handler(e: KeyboardEvent) {
+      if (e.key === '1') {
+        setNurseChatMode('mission-select')
+        setNurseMissionSelIdx(0)
+      } else if (e.key === '2') {
+        setNurseChatMode('chat')
+        setNurseChatHistory([])
+        sendNurseMessage('__init__', [])
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [nurseChatVisible, nurseChatMode])
 
   useEffect(() => {
     if (initializerRef.current) return
@@ -175,6 +320,12 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
         if (daily.error) setError(daily.error)
         const history: MissionRecord[] = Array.isArray(hist) ? hist : []
         setAllHistory(history)
+        const seen = new Set<string>()
+        const past: string[] = []
+        for (const m of history) {
+          if (!seen.has(m.topic)) { seen.add(m.topic); past.push(m.topic) }
+        }
+        setPastTopics(past)
 
         // 마지막 접속 날짜 확인
         const lastAccessDate = localStorage.getItem('lastAccessDate')
@@ -243,10 +394,15 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
 
   function handleDateClick(dateStr: string) {
     setSelectedDate(dateStr)
-    if (dateStr === todayStr) {
-      setTodayPanelOpen(prev => !prev)
-    } else {
-      setTodayPanelOpen(false)
+  }
+
+  async function handleDeleteMission(mission: MissionRecord) {
+    try {
+      await deleteProject(mission.project_dir)
+      setAllHistory(prev => prev.filter(m => m.id !== mission.id))
+      setTodayMissions(prev => prev.filter(m => m.id !== mission.id))
+    } catch (e: any) {
+      setError(e.message)
     }
   }
 
@@ -290,7 +446,6 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     )
   }
 
-  const difficultyColor: Record<string, string> = { '하': 'diff-low', '중': 'diff-mid', '상': 'diff-high' }
   const monthNames = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
   const weekDays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 
@@ -308,6 +463,8 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
       const missions = missionsByDate.get(dateStr) || []
       const count = missions.length
+      const hasCompleted = missions.some(m => m.status === 'completed')
+      const hasActive = missions.some(m => m.status !== 'completed')
       const activityLevel = count >= 3 ? 3 : count === 2 ? 2 : count === 1 ? 1 : 0
       const isToday = dateStr === todayStr
       const isSelected = dateStr === selectedDate
@@ -317,9 +474,8 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           key={dateStr}
           className={[
             'calendar-day',
-            activityLevel > 0 ? `activity-${activityLevel}` : '',
+            hasCompleted ? 'has-completed' : (hasActive ? `activity-${activityLevel}` : ''),
             isToday ? 'today' : '',
-            isToday && todayPanelOpen ? 'panel-open' : '',
             isSelected && !isToday ? 'selected' : '',
           ].filter(Boolean).join(' ')}
           onClick={() => handleDateClick(dateStr)}
@@ -380,7 +536,13 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
             ) : (
               <div className="sidebar-mission-list">
                 {selectedMissions.map((m) => (
-                  <div key={m.id} className="sidebar-mission-item" onClick={() => handleLoadMission(m)}>
+                  <div
+                    key={m.id}
+                    className="sidebar-mission-item"
+                    onClick={() => handleLoadMission(m)}
+                    onMouseEnter={() => setHoveringMissionId(m.id)}
+                    onMouseLeave={() => setHoveringMissionId(null)}
+                  >
                     <div className="sidebar-mission-topic">{m.topic}</div>
                     <div className="sidebar-mission-meta">
                       {loadingMissionId === m.id ? '준비중...' : m.project_dir.split('/').slice(-1)[0]}
@@ -388,6 +550,20 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
                     <span className={`project-status ${m.status === 'completed' ? 'completed' : ''}`}>
                       {m.status === 'completed' ? '완료' : '진행 중'}
                     </span>
+                    {hoveringMissionId === m.id && (
+                      <button
+                        className="mission-delete-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (window.confirm(`"${m.topic}" 미션을 삭제할까요?`)) {
+                            handleDeleteMission(m)
+                          }
+                        }}
+                        title="미션 삭제"
+                      >
+                        🗑
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -445,8 +621,139 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           </div>
         )}
 
+        {/* ── Nurse Chat 오버레이 ── */}
+        {nurseChatVisible && (
+          <div className={`vn-intro nurse-chat-overlay ${nurseChatFading ? 'vn-fade-out' : 'vn-fade-in'}`}>
+            <div className="vn-character nurse-chat-char">
+              <img
+                src="/greeting.png"
+                alt="간호사"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
+              <div className="vn-character-placeholder">👩‍⚕️</div>
+            </div>
+
+            <div className="nurse-chat-panel">
+              <div className="nurse-chat-header">
+                <span className="vn-name-tag" style={{ position: 'static', marginBottom: 0 }}>담당 간호사</span>
+                <button className="nurse-chat-skip" onClick={closeNurseChat}>닫기 ✕</button>
+              </div>
+
+              {/* 메시지 영역 */}
+              <div className="nurse-chat-messages">
+                {nurseChatHistory.map((msg, i) => (
+                  <div key={i} className={`nurse-chat-msg nurse-chat-msg--${msg.role}`}>
+                    {msg.role === 'nurse' && <span className="nurse-chat-avatar">👩‍⚕️</span>}
+                    <div className="nurse-chat-bubble">
+                      {msg.content.replace(/\[TOPICS\][\s\S]*?\[\/TOPICS\]/g, '').trim()}
+                    </div>
+                  </div>
+                ))}
+                {nurseChatLoading && nurseChatHistory.length === 0 && (
+                  <div className="nurse-chat-msg nurse-chat-msg--nurse">
+                    <span className="nurse-chat-avatar">👩‍⚕️</span>
+                    <div className="nurse-chat-bubble nurse-chat-typing">
+                      <span /><span /><span />
+                    </div>
+                  </div>
+                )}
+                <div ref={nurseChatBottomRef} />
+              </div>
+
+              {/* choice 모드: 기존 vs 새로운 */}
+              {nurseChatMode === 'choice' && (
+                <div className="nurse-chat-topics">
+                  <div className="nurse-chat-topics-label">어떻게 할까요? (1 / 2)</div>
+                  <button
+                    className="nurse-chat-topic-btn"
+                    onClick={() => { setNurseChatMode('mission-select'); setNurseMissionSelIdx(0) }}
+                  >
+                    <span className="nurse-chat-diff diff-low">1</span>
+                    <span className="nurse-chat-topic-name">기존 훈련 계속하기</span>
+                    <span className="nurse-chat-topic-arrow">↑↓ Enter</span>
+                  </button>
+                  <button
+                    className="nurse-chat-topic-btn"
+                    onClick={() => { setNurseChatMode('chat'); setNurseChatHistory([]); sendNurseMessage('__init__', []) }}
+                  >
+                    <span className="nurse-chat-diff diff-high">2</span>
+                    <span className="nurse-chat-topic-name">새로운 훈련 만들기</span>
+                    <span className="nurse-chat-topic-arrow">→</span>
+                  </button>
+                </div>
+              )}
+
+              {/* mission-select 모드: 오늘 미션 키보드 선택 */}
+              {nurseChatMode === 'mission-select' && (
+                <div className="nurse-chat-topics">
+                  <div className="nurse-chat-topics-label">오늘의 훈련 — ↑↓ 선택, Enter 시작, Esc 뒤로</div>
+                  {todayMissions.map((m, i) => (
+                    <button
+                      key={m.id}
+                      className={`nurse-chat-topic-btn${nurseMissionSelIdx === i ? ' selected' : ''}`}
+                      onClick={() => { closeNurseChat(); setTimeout(() => handleLoadMission(m), 350) }}
+                      onMouseEnter={() => setNurseMissionSelIdx(i)}
+                    >
+                      <span className={`nurse-chat-diff ${m.status === 'completed' ? 'diff-low' : 'diff-mid'}`}>
+                        {m.status === 'completed' ? '완료' : '진행'}
+                      </span>
+                      <span className="nurse-chat-topic-name">{m.topic}</span>
+                      {loadingMissionId === m.id
+                        ? <span className="nurse-chat-topic-arrow">준비중...</span>
+                        : <span className="nurse-chat-topic-arrow">→</span>
+                      }
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* chat 모드: 주제 추천 + 입력창 */}
+              {nurseChatMode === 'chat' && (
+                <>
+                  {nurseChatSuggestedTopics.length > 0 && (
+                    <div className="nurse-chat-topics">
+                      <div className="nurse-chat-topics-label">추천 훈련 주제</div>
+                      {nurseChatSuggestedTopics.map((t) => (
+                        <button
+                          key={t.slug}
+                          className="nurse-chat-topic-btn"
+                          onClick={() => confirmNurseTopic(t)}
+                        >
+                          <span className={`nurse-chat-diff diff-${t.difficulty === '상' ? 'high' : t.difficulty === '중' ? 'mid' : 'low'}`}>
+                            {t.difficulty}
+                          </span>
+                          <span className="nurse-chat-topic-name">{t.name}</span>
+                          <span className="nurse-chat-topic-arrow">→</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="nurse-chat-input-row">
+                    <input
+                      ref={nurseChatInputRef}
+                      className="nurse-chat-input"
+                      placeholder="간호사에게 말하기... (예: 알고리즘 연습하고 싶어)"
+                      value={nurseChatInput}
+                      disabled={nurseChatLoading}
+                      onChange={(e) => setNurseChatInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleNurseChatSubmit() }}
+                    />
+                    <button
+                      className="nurse-chat-send"
+                      onClick={handleNurseChatSubmit}
+                      disabled={nurseChatLoading || !nurseChatInput.trim()}
+                    >
+                      {nurseChatLoading ? '...' : '전송'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Main: Full-height Calendar ── */}
-        <div className="dashboard-main" ref={mainRef} style={{ paddingBottom: calendarPushUp > 0 ? `${calendarPushUp}px` : undefined }}>
+        <div className="dashboard-main" ref={mainRef}>
          <div
            className="calendar-content"
            ref={calendarRef}
@@ -478,74 +785,14 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
             </div>
           </div>
 
-          {/* Today panel — slides up from bottom */}
-          <div ref={panelRef} className={`today-panel ${todayPanelOpen ? 'visible' : ''}`}>
-            <div className="today-panel-handle" />
-            <div className="today-panel-header">
-              <div className="today-panel-title">
-                🏥 오늘의 재활 훈련 — {todayStr.slice(5).replace('-', '월 ')}일
-              </div>
-              <button className="today-panel-close" onClick={() => setTodayPanelOpen(false)}>✕</button>
+          {error && (
+            <div className="error-banner" style={{ marginTop: '1rem' }}>
+              <p className="error-message">{friendlyError(error)}</p>
+              {isSettingsError(error) && (
+                <button className="btn btn-primary" onClick={onOpenSettings}>설정으로 이동</button>
+              )}
             </div>
-
-            {topics.length > 0 && (
-              <div className="topic-cards">
-                {topics.map(t => (
-                  <div
-                    key={t.slug}
-                    className={`topic-card ${difficultyColor[t.difficulty] || ''}`}
-                    onClick={() => !confirming && handleCreateNewMission(t.name, t.slug)}
-                  >
-                    <div className={`difficulty-badge ${difficultyColor[t.difficulty] || ''}`}>
-                      난이도 {t.difficulty}
-                    </div>
-                    <div className="topic-card-name">{t.name}</div>
-                    <button className="topic-card-btn" disabled={confirming}>
-                      {confirming ? '생성중...' : '시작하기 →'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="custom-topic-row">
-              <span style={{ color: '#52525b', fontSize: '0.8125rem', flexShrink: 0 }}>직접 입력</span>
-              <input
-                className="topic-input"
-                placeholder="주제 이름"
-                value={customTopic}
-                onChange={(e) => {
-                  setCustomTopic(e.target.value)
-                  if (!customSlug && e.target.value.length > 2) {
-                    setCustomSlug(e.target.value.replace(/\s+/g, '').slice(0, 15))
-                  }
-                }}
-              />
-              <input
-                className="topic-input"
-                placeholder="영문 디렉토리명"
-                value={customSlug}
-                onChange={(e) => setCustomSlug(e.target.value)}
-                style={{ maxWidth: '150px' }}
-              />
-              <button
-                className="btn btn-primary"
-                onClick={() => handleCreateNewMission(customTopic, customSlug)}
-                disabled={confirming || !customTopic || !customSlug}
-              >
-                {confirming ? '생성중...' : '시작'}
-              </button>
-            </div>
-
-            {error && (
-              <div className="error-banner">
-                <p className="error-message">{friendlyError(error)}</p>
-                {isSettingsError(error) && (
-                  <button className="btn btn-primary" onClick={onOpenSettings}>설정으로 이동</button>
-                )}
-              </div>
-            )}
-          </div>
+          )}
          </div>
         </div>
 

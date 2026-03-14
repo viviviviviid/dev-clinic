@@ -40,6 +40,13 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
   const [explanations, setExplanations] = useState<Record<string, string>>({})
   const [isExplaining, setIsExplaining] = useState<Record<string, boolean>>({})
 
+  // Nurse VN overlay for wrong answers
+  const [nurseExpl, setNurseExpl] = useState('')
+  const [showNurse, setShowNurse] = useState(false)
+  const [isNurseExplaining, setIsNurseExplaining] = useState(false)
+  const [wrongCounts, setWrongCounts] = useState<Record<string, number>>({})
+  const [nurseExplKey, setNurseExplKey] = useState<string | null>(null)
+
   // Write mode state
   const [modes, setModes] = useState<Record<string, QuizMode>>({})
   const [writeInputs, setWriteInputs] = useState<Record<string, string>>({})
@@ -168,6 +175,10 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
   }
 
   async function fetchExplanation(key: string, item: QuizItem, wrongLabel: string) {
+    setNurseExpl('')
+    setShowNurse(true)
+    setNurseExplKey(key)
+    setIsNurseExplaining(true)
     setExplanations(prev => ({ ...prev, [key]: '' }))
     setIsExplaining(prev => ({ ...prev, [key]: true }))
     try {
@@ -195,12 +206,14 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
           if (match) {
             try {
               const parsed = JSON.parse(match[1]) as { text: string }
+              setNurseExpl(prev => prev + parsed.text)
               setExplanations(prev => ({ ...prev, [key]: (prev[key] ?? '') + parsed.text }))
             } catch { /* ignore */ }
           }
         }
       }
     } catch { /* ignore */ } finally {
+      setIsNurseExplaining(false)
       setIsExplaining(prev => ({ ...prev, [key]: false }))
     }
   }
@@ -210,6 +223,7 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     if (option.isCorrect) {
       onSolve(item.key, item.correctCode, item.markerType || 'hole', item.markerIndex ?? 0)
     } else {
+      setWrongCounts(prev => ({ ...prev, [item.key]: (prev[item.key] ?? 0) + 1 }))
       setShakingKey(item.key)
       setWrongKeys(prev => new Set(prev).add(item.key))
       setTimeout(() => setShakingKey(null), 450)
@@ -239,8 +253,30 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     }
   }
 
+  const nurseImg = nurseExplKey && wrongCounts[nurseExplKey] >= 2 ? '/angry.png' : '/shocked.png'
+
   return (
     <div className="quiz-overlay">
+      {showNurse && (
+        <div className="nurse-explanation-overlay">
+          <div className="nurse-overlay-character">
+            <img
+              src={nurseImg}
+              alt="간호사"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+            />
+          </div>
+          <div className="vn-dialogue nurse-vn-dialogue">
+            <div className="vn-name-tag">담당 간호사</div>
+            <p className="vn-dialogue-text nurse-dialogue-text">
+              {nurseExpl || (isNurseExplaining ? '설명 중...' : '')}
+              {isNurseExplaining && <span className="quiz-explanation-cursor" />}
+            </p>
+            <button className="nurse-close-btn" onClick={() => setShowNurse(false)}>✕ 닫기</button>
+          </div>
+        </div>
+      )}
+
       {quizLines.map(({ key, lineNumber, item, isLocked }) => {
         const viewTop = editor.getTopForLineNumber(lineNumber) - scrollTop
         const isOpen = openWidgets.has(key)
