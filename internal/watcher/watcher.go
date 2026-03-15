@@ -197,6 +197,9 @@ func (w *Watcher) snapshot(dir string) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
+		if strings.Contains(path, "/.snapshots/") {
+			return nil
+		}
 		ext := filepath.Ext(path)
 		if !watchedExts[ext] {
 			return nil
@@ -228,7 +231,7 @@ func (w *Watcher) run(ctx context.Context, dir string) {
 			if !ok {
 				return
 			}
-			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) == 0 {
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) == 0 {
 				continue
 			}
 			if !watchedExts[filepath.Ext(event.Name)] {
@@ -274,6 +277,9 @@ func (w *Watcher) triggerSync(dir string) {
 		if err != nil || info.IsDir() {
 			return nil
 		}
+		if strings.Contains(path, "/.snapshots/") {
+			return nil
+		}
 		ext := filepath.Ext(path)
 		if !watchedExts[ext] {
 			return nil
@@ -317,9 +323,6 @@ func (w *Watcher) triggerSync(dir string) {
 
 	w.mu.Lock()
 	w.snapshots = newSnapshots
-	w.mu.Unlock()
-
-	w.mu.Lock()
 	w.lastChangeTime = time.Time{}
 	w.mu.Unlock()
 

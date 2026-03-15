@@ -473,6 +473,167 @@ export default function Editor() {
         },
       }),
 
+      // Signature Help provider
+      monacoInstance.languages.registerSignatureHelpProvider(lang, {
+        signatureHelpTriggerCharacters: ['(', ','],
+        signatureHelpRetriggerCharacters: [','],
+        async provideSignatureHelp(_model, position) {
+          if (!lspClient.isReady) return null
+          const filePath = openFileRef.current
+          if (!filePath) return null
+          const result = await lspClient.signatureHelp(
+            filePath,
+            position.lineNumber - 1,
+            position.column - 1,
+          ).catch(() => null)
+          if (!result?.signatures?.length) return null
+          return {
+            value: {
+              signatures: result.signatures.map((sig: any) => ({
+                label: sig.label,
+                documentation: typeof sig.documentation === 'string'
+                  ? sig.documentation
+                  : sig.documentation?.value ?? '',
+                parameters: (sig.parameters ?? []).map((p: any) => ({
+                  label: p.label,
+                  documentation: typeof p.documentation === 'string'
+                    ? p.documentation
+                    : p.documentation?.value ?? '',
+                })),
+              })),
+              activeSignature: result.activeSignature ?? 0,
+              activeParameter: result.activeParameter ?? 0,
+            },
+            dispose() {},
+          }
+        },
+      }),
+
+      // Code Action provider
+      monacoInstance.languages.registerCodeActionProvider(lang, {
+        async provideCodeActions(model, range, context) {
+          if (!lspClient.isReady) return { actions: [], dispose() {} }
+          const filePath = openFileRef.current || model.uri.fsPath || model.uri.path
+          const diags = context.markers.map(m => ({
+            range: {
+              start: { line: m.startLineNumber - 1, character: m.startColumn - 1 },
+              end: { line: m.endLineNumber - 1, character: m.endColumn - 1 },
+            },
+            message: m.message,
+            severity: m.severity,
+          }))
+          const actions = await lspClient.codeAction(
+            filePath,
+            {
+              startLine: range.startLineNumber - 1,
+              startChar: range.startColumn - 1,
+              endLine: range.endLineNumber - 1,
+              endChar: range.endColumn - 1,
+            },
+            diags,
+          ).catch(() => [])
+          return {
+            actions: actions.map((a: any) => ({
+              title: a.title,
+              kind: a.kind ?? '',
+              isPreferred: a.isPreferred ?? false,
+              command: a.command
+                ? { id: a.command.command, title: a.command.title, arguments: a.command.arguments }
+                : undefined,
+            })),
+            dispose() {},
+          }
+        },
+      }),
+
+      // Rename provider
+      monacoInstance.languages.registerRenameProvider(lang, {
+        async provideRenameEdits(model, position, newName) {
+          if (!lspClient.isReady) return null
+          const filePath = openFileRef.current || model.uri.fsPath || model.uri.path
+          const result = await lspClient.rename(
+            filePath,
+            position.lineNumber - 1,
+            position.column - 1,
+            newName,
+          ).catch(() => null)
+          if (!result) return null
+          const edits: import('monaco-editor').languages.IWorkspaceTextEdit[] = []
+          const changes = result.changes ?? {}
+          for (const [uri, textEdits] of Object.entries(changes) as [string, any[]][]) {
+            for (const te of textEdits) {
+              edits.push({
+                resource: monacoInstance.Uri.parse(uri),
+                textEdit: {
+                  range: {
+                    startLineNumber: te.range.start.line + 1,
+                    startColumn: te.range.start.character + 1,
+                    endLineNumber: te.range.end.line + 1,
+                    endColumn: te.range.end.character + 1,
+                  },
+                  text: te.newText,
+                },
+                versionId: undefined,
+              })
+            }
+          }
+          return { edits }
+        },
+      }),
+
+      // Inlay Hints provider
+      monacoInstance.languages.registerInlayHintsProvider(lang, {
+        async provideInlayHints(_model, range) {
+          if (!lspClient.isReady) return { hints: [], dispose() {} }
+          const filePath = openFileRef.current
+          if (!filePath) return { hints: [], dispose() {} }
+          const hints = await lspClient.inlayHints(
+            filePath,
+            range.startLineNumber - 1,
+            range.endLineNumber - 1,
+          ).catch(() => null)
+          if (!hints?.length) return { hints: [], dispose() {} }
+          return {
+            hints: hints.map((h: any) => ({
+              position: { lineNumber: h.position.line + 1, column: h.position.character + 1 },
+              label: typeof h.label === 'string'
+                ? h.label
+                : h.label.map((p: any) => p.value).join(''),
+              kind: h.kind === 1
+                ? monacoInstance.languages.InlayHintKind.Type
+                : monacoInstance.languages.InlayHintKind.Parameter,
+              paddingLeft: h.paddingLeft ?? false,
+              paddingRight: h.paddingRight ?? false,
+            })),
+            dispose() {},
+          }
+        },
+      }),
+
+      // Code Lens provider
+      monacoInstance.languages.registerCodeLensProvider(lang, {
+        async provideCodeLenses(model) {
+          if (!lspClient.isReady) return { lenses: [], dispose() {} }
+          const filePath = openFileRef.current || model.uri.fsPath || model.uri.path
+          const lenses = await lspClient.codeLens(filePath).catch(() => null)
+          if (!lenses?.length) return { lenses: [], dispose() {} }
+          return {
+            lenses: lenses.map((lens: any) => ({
+              range: {
+                startLineNumber: lens.range.start.line + 1,
+                startColumn: lens.range.start.character + 1,
+                endLineNumber: lens.range.end.line + 1,
+                endColumn: lens.range.end.character + 1,
+              },
+              command: lens.command
+                ? { id: lens.command.command ?? '', title: lens.command.title ?? '' }
+                : { id: '', title: '' },
+            })),
+            dispose() {},
+          }
+        },
+      }),
+
       // Completion provider
       monacoInstance.languages.registerCompletionItemProvider(lang, {
         triggerCharacters: TRIGGER_CHARS[lang] ?? ['.'],
@@ -589,6 +750,8 @@ export default function Editor() {
     }
 
     ed.setModel(model)
+    const isGo = openFile.endsWith('.go')
+    model.updateOptions({ tabSize: isGo ? 4 : 2, insertSpaces: !isGo })
     applyDecorations(ed, openFileContent, filename, skillLevel, solvedHoles, decorationRef)
 
     // 캐시된 LSP 진단 적용
@@ -713,6 +876,7 @@ export default function Editor() {
       if (filePath) {
         await writeFileRef.current(filePath, content)
         markFileSaved(filePath)
+        lspClient.notifySave(filePath)
       }
     })
 
@@ -862,7 +1026,7 @@ export default function Editor() {
                 <span className="editor-tab-name">{tabName}</span>
                 <button
                   className="tab-close-btn"
-                  onClick={(e) => { e.stopPropagation(); closeTab(tab.path) }}
+                  onClick={(e) => { e.stopPropagation(); lspClient.notifyClose(tab.path); closeTab(tab.path) }}
                   title="탭 닫기"
                 >✕</button>
               </div>

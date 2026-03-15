@@ -159,6 +159,12 @@ interface AppState {
   startChatStream: () => void
   addChatChunk: (chunk: string) => void
   endChatStream: () => void
+
+  // Quick Open / Search Panel
+  showQuickOpen: boolean
+  setShowQuickOpen: (v: boolean) => void
+  showSearchPanel: boolean
+  setShowSearchPanel: (v: boolean) => void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -327,4 +333,10 @@ export const useStore = create<AppState>((set, get) => ({
       ],
       currentChatStreaming: '',
     })),
+
+  // Quick Open / Search Panel
+  showQuickOpen: false,
+  setShowQuickOpen: (v) => set({ showQuickOpen: v }),
+  showSearchPanel: false,
+  setShowSearchPanel: (v) => set({ showSearchPanel: v }),
 }))

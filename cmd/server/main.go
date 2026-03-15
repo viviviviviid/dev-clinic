@@ -62,6 +62,8 @@ func main() {
 		apiGroup.GET("/fs/read", auth, api.ReadFile)
 		apiGroup.POST("/fs/write", auth, api.WriteFile)
 		apiGroup.GET("/fs/validate", auth, api.ValidateDir)
+		apiGroup.GET("/fs/search/files", auth, api.SearchFiles)
+		apiGroup.GET("/fs/search/content", auth, api.SearchContent)
 
 		// Project
 		apiGroup.GET("/project/status", auth, api.GetProjectStatus)

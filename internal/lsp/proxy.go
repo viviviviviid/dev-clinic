@@ -88,6 +88,11 @@ func ServeWS(c *gin.Context) {
 		log.Printf("lsp: stdout pipe error: %v", err)
 		return
 	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		log.Printf("lsp: stderr pipe error: %v", err)
+		return
+	}
 
 	if err := cmd.Start(); err != nil {
 		log.Printf("lsp: start error: %v", err)
@@ -100,6 +105,13 @@ func ServeWS(c *gin.Context) {
 	}()
 
 	log.Printf("lsp: started %s for lang=%s root=%s", cmdArgs[0], lang, rootPath)
+
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			log.Printf("lsp %s: %s", cmdArgs[0], scanner.Text())
+		}
+	}()
 
 	// WS → LS stdin (goroutine)
 	wsToLS := make(chan error, 1)

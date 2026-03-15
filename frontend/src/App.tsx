@@ -9,6 +9,8 @@ import Editor from './components/Editor'
 import FeedbackPanel from './components/FeedbackPanel'
 import TerminalPanel from './components/Terminal'
 import ProblemsPanel from './components/ProblemsPanel'
+import QuickOpen from './components/QuickOpen'
+import SearchPanel from './components/SearchPanel'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useStore } from './store'
 import type { UserSettings } from './store'
@@ -75,7 +77,7 @@ export default function App() {
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [problemsOpen, setProblemsOpen] = useState(false)
 
-  const { setUser, setUserSettings, projectStatus, setProjectStatus, setSkillLevel, setQuizData } = useStore()
+  const { setUser, setUserSettings, projectStatus, setProjectStatus, setSkillLevel, setQuizData, showQuickOpen, setShowQuickOpen, showSearchPanel, setShowSearchPanel } = useStore()
   const { refreshFileTree, loadQuizData } = useProject()
 
   // Panel sizes
@@ -134,6 +136,22 @@ export default function App() {
   }, [problemsHeight, onProblemsResize])
 
   useWebSocket()
+
+  // Global keyboard shortcuts: Cmd+P (Quick Open), Cmd+Shift+F (Search Panel)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'p') {
+        e.preventDefault()
+        setShowQuickOpen(true)
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'f') {
+        e.preventDefault()
+        setShowSearchPanel(!showSearchPanel)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [showSearchPanel, setShowQuickOpen, setShowSearchPanel])
 
   // Auth state listener
   useEffect(() => {
@@ -247,7 +265,13 @@ export default function App() {
   // Main editor
   return (
     <div className="app">
+      {showQuickOpen && <QuickOpen />}
       <div className="app-main">
+        {showSearchPanel && (
+          <div className="app-search-panel">
+            <SearchPanel />
+          </div>
+        )}
         <div className="app-sidebar" style={{ width: sidebarWidth }}>
           <FileTree />
         </div>

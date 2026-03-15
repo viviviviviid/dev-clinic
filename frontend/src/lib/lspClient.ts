@@ -246,6 +246,101 @@ class LspClient {
     return result as Location[]
   }
 
+  notifySave(filePath: string): void {
+    const uri = `file://${filePath}`
+    if (!this.isReady || !this.openedUris.has(uri)) return
+    this.notify('textDocument/didSave', { textDocument: { uri } })
+  }
+
+  notifyClose(filePath: string): void {
+    const uri = `file://${filePath}`
+    if (!this.isReady || !this.openedUris.has(uri)) return
+    this.notify('textDocument/didClose', { textDocument: { uri } })
+    this.openedUris.delete(uri)
+    this.fileVersions.delete(uri)
+  }
+
+  async signatureHelp(filePath: string, line: number, char: number): Promise<any> {
+    const uri = `file://${filePath}`
+    const result = await Promise.race([
+      this.request('textDocument/signatureHelp', {
+        textDocument: { uri },
+        position: { line, character: char },
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+    ])
+    return result ?? null
+  }
+
+  async codeAction(
+    filePath: string,
+    range: { startLine: number; startChar: number; endLine: number; endChar: number },
+    diagnostics: any[] = [],
+  ): Promise<any[]> {
+    const uri = `file://${filePath}`
+    const result = await Promise.race([
+      this.request('textDocument/codeAction', {
+        textDocument: { uri },
+        range: {
+          start: { line: range.startLine, character: range.startChar },
+          end: { line: range.endLine, character: range.endChar },
+        },
+        context: { diagnostics },
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ])
+    if (!result) return []
+    return result as any[]
+  }
+
+  async rename(
+    filePath: string,
+    line: number,
+    char: number,
+    newName: string,
+  ): Promise<any> {
+    const uri = `file://${filePath}`
+    const result = await Promise.race([
+      this.request('textDocument/rename', {
+        textDocument: { uri },
+        position: { line, character: char },
+        newName,
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ])
+    return result ?? null
+  }
+
+  async inlayHints(
+    filePath: string,
+    startLine: number,
+    endLine: number,
+  ): Promise<any[] | null> {
+    const uri = `file://${filePath}`
+    const result = await Promise.race([
+      this.request('textDocument/inlayHint', {
+        textDocument: { uri },
+        range: {
+          start: { line: startLine, character: 0 },
+          end: { line: endLine, character: 0 },
+        },
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+    ])
+    return result as any[] ?? null
+  }
+
+  async codeLens(filePath: string): Promise<any[] | null> {
+    const uri = `file://${filePath}`
+    const result = await Promise.race([
+      this.request('textDocument/codeLens', {
+        textDocument: { uri },
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ])
+    return result as any[] ?? null
+  }
+
   async hover(
     filePath: string,
     line: number,
@@ -267,25 +362,37 @@ class LspClient {
     await this.request('initialize', {
       processId: null,
       rootUri: `file://${rootPath}`,
+      workspaceFolders: [{ uri: `file://${rootPath}`, name: 'root' }],
       capabilities: {
         textDocument: {
-          publishDiagnostics: {
-            relatedInformation: false,
-          },
+          publishDiagnostics: { relatedInformation: true },
           definition: {},
           references: {},
           hover: {},
           formatting: {},
+          signatureHelp: {
+            signatureInformation: {
+              documentationFormat: ['plaintext', 'markdown'],
+              parameterInformation: { labelOffsetSupport: true },
+            },
+          },
+          codeAction: {
+            codeActionLiteralSupport: {
+              codeActionKind: {
+                valueSet: ['quickfix', 'refactor', 'source', 'source.organizeImports'],
+              },
+            },
+          },
+          rename: { prepareSupport: false },
+          inlayHint: { resolveSupport: { properties: [] } },
+          codeLens: {},
           completion: {
             completionItem: {
               snippetSupport: true,
               documentationFormat: ['plaintext', 'markdown'],
             },
           },
-          synchronization: {
-            didSave: false,
-            willSave: false,
-          },
+          synchronization: { didSave: true, willSave: false },
         },
       },
     })

@@ -261,6 +261,243 @@ body {
 .sb-err { color: #f85149; font-size: 11px; }
 .sb-warn { color: #f0883e; font-size: 11px; }
 
+/* ── Search Panel (Cmd+Shift+F) ── */
+.app-search-panel {
+  flex-shrink: 0;
+  width: 300px;
+  border-right: 1px solid #21262d;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.search-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #161b22;
+  color: #e6edf3;
+  font-size: 13px;
+}
+
+.search-panel-header {
+  padding: 8px;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+
+.search-panel-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.search-panel-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.search-panel-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: #e6edf3;
+  font-size: 13px;
+}
+
+.search-panel-close {
+  background: none;
+  border: none;
+  color: #6e7681;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+}
+.search-panel-close:hover { color: #e6edf3; }
+
+.search-panel-summary {
+  font-size: 11px;
+  color: #6e7681;
+  margin-top: 4px;
+  padding: 0 2px;
+}
+
+.search-panel-results {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.search-panel-loading,
+.search-panel-empty {
+  padding: 12px;
+  color: #6e7681;
+  font-size: 12px;
+}
+
+.search-group {
+  border-bottom: 1px solid #1c2128;
+}
+
+.search-group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  background: #0d1117;
+  user-select: none;
+}
+.search-group-header:hover { background: #161b22; }
+
+.search-group-toggle { font-size: 10px; color: #6e7681; flex-shrink: 0; }
+
+.search-group-filename {
+  font-weight: 600;
+  color: #e6edf3;
+  font-size: 12px;
+}
+
+.search-group-dir {
+  font-size: 11px;
+  color: #6e7681;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-group-count {
+  font-size: 11px;
+  color: #6e7681;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.search-result-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px 3px 24px;
+  cursor: pointer;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.search-result-item:hover { background: #1c2128; }
+
+.search-result-linenum {
+  font-size: 11px;
+  color: #6e7681;
+  flex-shrink: 0;
+  min-width: 28px;
+  text-align: right;
+}
+
+.search-result-content {
+  font-size: 12px;
+  color: #8b949e;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-content mark {
+  background: rgba(255, 213, 0, 0.3);
+  color: #ffd500;
+  border-radius: 2px;
+}
+
+/* ── Quick Open (Cmd+P) ── */
+.quick-open-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  padding-top: 80px;
+}
+
+.quick-open-panel {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  width: 560px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+
+.quick-open-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #21262d;
+}
+
+.quick-open-icon { font-size: 14px; flex-shrink: 0; }
+
+.quick-open-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: #e6edf3;
+  font-size: 14px;
+}
+
+.quick-open-results {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.quick-open-empty {
+  padding: 16px;
+  color: #6e7681;
+  font-size: 13px;
+  text-align: center;
+}
+
+.quick-open-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.quick-open-item:hover,
+.quick-open-item.selected {
+  background: #1f2937;
+}
+
+.quick-open-item-icon { font-size: 13px; flex-shrink: 0; }
+
+.quick-open-item-name {
+  font-size: 13px;
+  color: #e6edf3;
+  flex: 1;
+}
+
+.quick-open-item-name mark {
+  background: rgba(255, 213, 0, 0.3);
+  color: #ffd500;
+  border-radius: 2px;
+}
+
+.quick-open-item-dir {
+  font-size: 11px;
+  color: #6e7681;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
 .loading-screen {
   height: 100vh;
   display: flex;
