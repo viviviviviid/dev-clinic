@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/coding-tutor/internal/config"
 	"github.com/coding-tutor/internal/supabase"
 	"github.com/gin-gonic/gin"
 )
@@ -35,14 +36,16 @@ func GetUserSettings(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, settings[0])
+	// Inject server-side base_dir (CLI arg overrides DB value)
+	s := settings[0]
+	s.BaseDir = config.Global.BaseDir
+	c.JSON(http.StatusOK, s)
 }
 
 func PutUserSettings(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	var req struct {
-		BaseDir    string `json:"base_dir"`
 		Language   string `json:"language"`
 		SkillLevel string `json:"skill_level"`
 	}
@@ -53,7 +56,7 @@ func PutUserSettings(c *gin.Context) {
 
 	settings := UserSettings{
 		UserID:     userID,
-		BaseDir:    req.BaseDir,
+		BaseDir:    config.Global.BaseDir, // always from server config
 		Language:   req.Language,
 		SkillLevel: req.SkillLevel,
 		UpdatedAt:  time.Now().UTC(),

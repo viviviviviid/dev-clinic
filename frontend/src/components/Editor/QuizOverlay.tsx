@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import type { editor } from 'monaco-editor'
 import type { QuizData, QuizItem } from '../../store'
 import { supabase } from '../../lib/supabase'
+import { LOCAL } from '../../lib/api'
 
 interface QuizOverlayProps {
   editor: editor.IStandaloneCodeEditor
@@ -185,7 +186,7 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
       const { data: { session } } = await supabase.auth.getSession()
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
-      const res = await fetch('/api/explain', {
+      const res = await fetch(`${LOCAL}/api/explain`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ question: item.question, wrongChoice: wrongLabel, correctCode: item.correctCode, markerType: item.markerType || 'hole' }),

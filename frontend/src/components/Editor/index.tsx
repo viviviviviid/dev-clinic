@@ -10,6 +10,7 @@ import type { DiagnosticItem } from '../../store'
 import QuizOverlay from './QuizOverlay'
 import ConceptPanel from './ConceptPanel'
 import './Editor.css'
+import { LOCAL } from '../../lib/api'
 
 type DecorCollection = editor.IEditorDecorationsCollection
 
@@ -192,10 +193,57 @@ async function readFileViaApi(absPath: string): Promise<string> {
   const { data: { session } } = await supabase.auth.getSession()
   const headers: Record<string, string> = {}
   if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
-  const res = await fetch(`/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
+  const res = await fetch(`${LOCAL}/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
   if (!res.ok) throw new Error(`readFile failed: ${res.status}`)
   const data = await res.json()
   return data.content ?? ''
+}
+
+async function fetchGitDiff(filePath: string, projectDir: string): Promise<Array<{lineNum: number; type: string}>> {
+  const { data: { session } } = await supabase.auth.getSession()
+  const headers: Record<string, string> = {}
+  if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
+  try {
+    const res = await fetch(
+      `/api/fs/git-diff?path=${encodeURIComponent(filePath)}&dir=${encodeURIComponent(projectDir)}`,
+      { headers }
+    )
+    if (!res.ok) return []
+    return await res.json()
+  } catch { return [] }
+}
+
+// Detect test functions in a file by path + content (regex-based, no LSP needed)
+function getTestFunctions(filePath: string, content: string): Array<{ name: string; line: number }> {
+  const results: Array<{ name: string; line: number }> = []
+  const filename = filePath.split('/').pop() || ''
+  const lines = content.split('\n')
+
+  if (filename.endsWith('_test.go')) {
+    lines.forEach((line, i) => {
+      const m = line.match(/^func (Test\w+)\(/)
+      if (m) results.push({ name: m[1], line: i + 1 })
+    })
+  } else if (/^test_.*\.py$/.test(filename) || /.*_test\.py$/.test(filename)) {
+    lines.forEach((line, i) => {
+      const m = line.match(/^def (test_\w+)\(/)
+      if (m) results.push({ name: m[1], line: i + 1 })
+    })
+  } else if (filename.endsWith('.rs')) {
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === '#[test]' && i + 1 < lines.length) {
+        const m = lines[i + 1].match(/fn (\w+)\(/)
+        if (m) results.push({ name: m[1], line: i + 2 })
+      }
+    }
+  } else if (/\.(test|spec)\.(ts|tsx|js|jsx)$/.test(filename)) {
+    lines.forEach((line, i) => {
+      const m = line.match(/^\s*(?:test|it)\(['"`]([^'"`]+)/)
+      if (m) results.push({ name: m[1], line: i + 1 })
+    })
+  }
+
+  return results
 }
 
 // Standalone Go text-search fallback (same-file only)
@@ -251,12 +299,15 @@ export default function Editor() {
     setDiagnostics,
     pendingNavigate,
     setPendingNavigate,
+    showMinimap,
   } = useStore()
   const { writeFile } = useProject()
   const writeFileRef = useRef(writeFile)
   useEffect(() => { writeFileRef.current = writeFile }, [writeFile])
+  const handleTestFuncRef = useRef<(name: string) => void>(() => {})
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const decorationRef = useRef<DecorCollection | null>(null)
+  const gitDiffCollectionRef = useRef<DecorCollection | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null)
   // definition 이동 대상 위치 (cross-file): state 대신 ref로 관리해 React 렌더 사이클과 분리
@@ -696,7 +747,37 @@ export default function Editor() {
       }),
     ])
 
-    return () => disposables.forEach((d) => d.dispose())
+    // Register global command for running individual test functions via CodeLens
+    const cmdDisposable = monacoInstance.editor.registerCommand(
+      'tutor.runTest',
+      (_accessor: unknown, funcName: string) => handleTestFuncRef.current(funcName),
+    )
+
+    // Custom test CodeLens provider (regex-based, works without LSP)
+    const testLensDisposable = monacoInstance.languages.registerCodeLensProvider(
+      { scheme: 'file' },
+      {
+        provideCodeLenses(model) {
+          const filePath = model.uri.fsPath || model.uri.path
+          const content = model.getValue()
+          const tests = getTestFunctions(filePath, content)
+          if (!tests.length) return { lenses: [], dispose() {} }
+          return {
+            lenses: tests.map((t) => ({
+              range: { startLineNumber: t.line, startColumn: 1, endLineNumber: t.line, endColumn: 1 },
+              command: { id: 'tutor.runTest', title: '▶ Run Test', arguments: [t.name] },
+            })),
+            dispose() {},
+          }
+        },
+      },
+    )
+
+    return () => {
+      disposables.forEach((d) => d.dispose())
+      cmdDisposable.dispose()
+      testLensDisposable.dispose()
+    }
   }, [monacoInstance])
 
   // Monaco 마커 변경 → setDiagnostics
@@ -772,6 +853,37 @@ export default function Editor() {
   useEffect(() => {
     editorRef.current?.updateOptions({ readOnly: openFileReadOnly })
   }, [openFileReadOnly])
+
+  // minimap 토글
+  useEffect(() => {
+    editorRef.current?.updateOptions({ minimap: { enabled: showMinimap } })
+  }, [showMinimap])
+
+  // Git diff gutter decorations
+  useEffect(() => {
+    const ed = editorRef.current
+    if (!ed || !monacoInstance || !openFile || !projectStatus?.dir) return
+    const dir = projectStatus.dir
+    fetchGitDiff(openFile, dir).then((changes) => {
+      if (gitDiffCollectionRef.current) gitDiffCollectionRef.current.clear()
+      if (!changes.length) return
+      const decorations = changes
+        .filter(c => c.type === 'added')
+        .map(c => ({
+          range: {
+            startLineNumber: c.lineNum,
+            startColumn: 1,
+            endLineNumber: c.lineNum,
+            endColumn: 1,
+          },
+          options: {
+            isWholeLine: false,
+            linesDecorationsClassName: 'git-added-gutter',
+          } as import('monaco-editor').editor.IModelDecorationOptions,
+        }))
+      gitDiffCollectionRef.current = ed.createDecorationsCollection(decorations)
+    })
+  }, [openFile, monacoInstance, projectStatus?.dir])
 
   // navigateCrossFileRef: fresh 값 유지 (addTab, setOpenFileReadOnly, projectStatus?.dir)
   useEffect(() => {
@@ -943,7 +1055,12 @@ export default function Editor() {
       const response = await fetch(endpoint, { headers: runHeaders })
       console.log(`[streamOutput] ${endpoint} → status=${response.status}, ok=${response.ok}`)
       if (!response.ok || !response.body) {
-        setRunOutput([`[오류] 요청 실패 (${response.status})`])
+        let msg = `[오류] 요청 실패 (${response.status})`
+        try {
+          const body = await response.json()
+          if (body.error) msg += ': ' + body.error
+        } catch { /* ignore */ }
+        setRunOutput([msg])
         setActive(false)
         return
       }
@@ -985,11 +1102,14 @@ export default function Editor() {
     streamOutput('/api/run', '실행 결과', setIsRunning)
   }
 
-  async function handleTest() {
-    if (isRunning || isTesting) return
-    console.log('[test] button clicked, starting streamOutput')
-    streamOutput('/api/test', '테스트 결과', setIsTesting)
-  }
+  useEffect(() => {
+    handleTestFuncRef.current = (funcName: string) => {
+      if (isRunning || isTesting) return
+      const url = funcName ? `/api/test?func=${encodeURIComponent(funcName)}` : '/api/test'
+      const title = funcName ? `테스트: ${funcName}` : '테스트 결과'
+      streamOutput(url, title, setIsTesting)
+    }
+  }, [isRunning, isTesting])
 
   if (!openFile) {
     return (
@@ -1046,18 +1166,11 @@ export default function Editor() {
               <>▶ 실행</>
             )}
           </button>
-          <button
-            className={`run-btn test-btn ${isTesting ? 'running' : ''}`}
-            onClick={handleTest}
-            disabled={isRunning || isTesting}
-            title="테스트 실행"
-          >
-            {isTesting ? (
-              <><span className="run-spinner" /> 테스트 중...</>
-            ) : (
-              <>✓ 테스트</>
-            )}
-          </button>
+          {isTesting && (
+            <span className="run-btn test-btn running" style={{ pointerEvents: 'none' }}>
+              <span className="run-spinner" /> 테스트 중...
+            </span>
+          )}
           <span
             className={`lsp-status ${lspReady ? 'lsp-ready' : 'lsp-off'}`}
             title={lspReady ? 'LSP 연결됨 (자동완성 활성)' : 'LSP 미연결 (gopls 설치 필요)'}
@@ -1094,7 +1207,7 @@ export default function Editor() {
             fontSize: 14,
             fontFamily: "'Consolas', 'Courier New', monospace",
             lineNumbers: 'on',
-            minimap: { enabled: false },
+            minimap: { enabled: showMinimap },
             scrollBeyondLastLine: true,
             wordWrap: 'on',
             glyphMargin: true,
@@ -1107,6 +1220,7 @@ export default function Editor() {
             suggestOnTriggerCharacters: true,
             acceptSuggestionOnCommitCharacter: true,
             wordBasedSuggestions: 'off',
+            codeLens: true,
           }}
         />
         {skillLevel === 'newbie' && editorInstance && openFile && (

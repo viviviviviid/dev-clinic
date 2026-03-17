@@ -14,9 +14,28 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// normalizeLanguage reduces strings like "Go (v1.20+)" → "go".
+func normalizeLanguage(language string) string {
+	l := strings.ToLower(strings.TrimSpace(language))
+	switch {
+	case strings.HasPrefix(l, "go"):
+		return "go"
+	case strings.HasPrefix(l, "python"):
+		return "python"
+	case strings.HasPrefix(l, "rust"):
+		return "rust"
+	case strings.HasPrefix(l, "typescript"):
+		return "typescript"
+	case strings.HasPrefix(l, "javascript"):
+		return "javascript"
+	default:
+		return l
+	}
+}
+
 // runCommand returns the command args for the given language.
 func runCommand(language string) []string {
-	switch strings.ToLower(language) {
+	switch normalizeLanguage(language) {
 	case "go":
 		return []string{"go", "run", "."}
 	case "python":
@@ -33,15 +52,28 @@ func runCommand(language string) []string {
 }
 
 // testCommand returns the command args for running tests in the given language.
-func testCommand(language string) []string {
-	switch strings.ToLower(language) {
+// If funcName is non-empty, only that specific test function is run.
+func testCommand(language, funcName string) []string {
+	switch normalizeLanguage(language) {
 	case "go":
+		if funcName != "" {
+			return []string{"go", "test", "-v", "-run", funcName, "./..."}
+		}
 		return []string{"go", "test", "-v", "./..."}
 	case "python":
+		if funcName != "" {
+			return []string{"python3", "-m", "pytest", "-v", "-k", funcName}
+		}
 		return []string{"python3", "-m", "pytest", "-v"}
 	case "rust":
+		if funcName != "" {
+			return []string{"cargo", "test", funcName}
+		}
 		return []string{"cargo", "test"}
 	case "typescript", "javascript":
+		if funcName != "" {
+			return []string{"npx", "--yes", "jest", "--no-coverage", "-t", funcName}
+		}
 		return []string{"npx", "--yes", "jest", "--no-coverage"}
 	default:
 		return nil
@@ -162,7 +194,8 @@ func RunTest(c *gin.Context) {
 	}
 
 	status := project.Global.GetStatus()
-	args := testCommand(status.Language)
+	funcName := c.Query("func")
+	args := testCommand(status.Language, funcName)
 	if args == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "지원하지 않는 언어: " + status.Language})
 		return

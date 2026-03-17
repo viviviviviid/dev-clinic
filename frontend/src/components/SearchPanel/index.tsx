@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useStore } from '../../store'
 import { supabase } from '../../lib/supabase'
+import { LOCAL } from '../../lib/api'
 
 interface ContentMatch {
   relPath: string
@@ -91,7 +92,7 @@ export default function SearchPanel() {
   async function openResult(absPath: string, lineNum: number) {
     const headers = await authHeaders()
     try {
-      const res = await fetch(`/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
+      const res = await fetch(`${LOCAL}/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
       const data = await res.json()
       addTab(absPath, data.content || '')
       setPendingNavigate({ path: absPath, line: lineNum, column: 1 })

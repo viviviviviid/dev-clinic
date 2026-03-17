@@ -507,3 +507,35 @@ body {
   font-size: 14px;
   background: #0d1117;
 }
+
+.ws-reconnect-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 900;
+  background: #2d1f00;
+  border-bottom: 1px solid #f0883e;
+  color: #f0883e;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.ws-reconnect-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f0883e;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}

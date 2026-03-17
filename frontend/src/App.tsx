@@ -11,12 +11,14 @@ import TerminalPanel from './components/Terminal'
 import ProblemsPanel from './components/ProblemsPanel'
 import QuickOpen from './components/QuickOpen'
 import SearchPanel from './components/SearchPanel'
+import ToastContainer from './components/Toast'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useStore } from './store'
 import type { UserSettings } from './store'
 import { useProject } from './hooks/useProject'
 import { lspClient } from './lib/lspClient'
 import './App.css'
+import { REMOTE, LOCAL } from './lib/api'
 
 const SKILL_BADGE: Record<string, string> = {
   newbie: '🌱 뉴비',
@@ -76,8 +78,9 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [problemsOpen, setProblemsOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
-  const { setUser, setUserSettings, projectStatus, setProjectStatus, setSkillLevel, setQuizData, showQuickOpen, setShowQuickOpen, showSearchPanel, setShowSearchPanel } = useStore()
+  const { setUser, setUserSettings, projectStatus, setProjectStatus, clearProjectStatus, setSkillLevel, setQuizData, showQuickOpen, setShowQuickOpen, showSearchPanel, setShowSearchPanel, wsStatus } = useStore()
   const { refreshFileTree, loadQuizData } = useProject()
 
   // Panel sizes
@@ -137,7 +140,7 @@ export default function App() {
 
   useWebSocket()
 
-  // Global keyboard shortcuts: Cmd+P (Quick Open), Cmd+Shift+F (Search Panel)
+  // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'p') {
@@ -147,6 +150,14 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'f') {
         e.preventDefault()
         setShowSearchPanel(!showSearchPanel)
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'j') {
+        e.preventDefault()
+        setTerminalOpen((v) => !v)
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'b') {
+        e.preventDefault()
+        setSidebarOpen((v) => !v)
       }
     }
     window.addEventListener('keydown', handler)
@@ -185,7 +196,7 @@ export default function App() {
   async function loadSettings(token: string) {
     setSettingsLoading(true)
     try {
-      const res = await fetch('/api/user/settings', {
+      const res = await fetch(`${REMOTE}/api/user/settings`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       const data = await res.json()
@@ -207,7 +218,7 @@ export default function App() {
 
   function handleBackToDashboard() {
     lspClient.disconnect()
-    setProjectStatus(null)
+    clearProjectStatus()
   }
 
   async function handleMissionReady(projectDir: string, fallbackSkillLevel: string) {
@@ -222,9 +233,7 @@ export default function App() {
     // Fetch project status to update store
     const { data: { session } } = await supabase.auth.getSession()
     if (session) {
-      const res = await fetch('/api/project/status', {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      })
+      const res = await fetch(`${LOCAL}/api/project/status`)
       const data = await res.json()
       setProjectStatus(data)
 
@@ -266,17 +275,25 @@ export default function App() {
   return (
     <div className="app">
       {showQuickOpen && <QuickOpen />}
+      {wsStatus === 'reconnecting' && (
+        <div className="ws-reconnect-banner">
+          <span className="ws-reconnect-dot" /> 서버 재연결 중...
+        </div>
+      )}
       <div className="app-main">
         {showSearchPanel && (
           <div className="app-search-panel">
             <SearchPanel />
           </div>
         )}
-        <div className="app-sidebar" style={{ width: sidebarWidth }}>
-          <FileTree />
-        </div>
-
-        <ResizerHandle direction="horizontal" onMouseDown={makeSidebarDown} />
+        {sidebarOpen && (
+          <>
+            <div className="app-sidebar" style={{ width: sidebarWidth }}>
+              <FileTree />
+            </div>
+            <ResizerHandle direction="horizontal" onMouseDown={makeSidebarDown} />
+          </>
+        )}
 
         <div className="app-editor">
           <div className="app-monaco">
@@ -309,6 +326,7 @@ export default function App() {
         </div>
       </div>
 
+      <ToastContainer />
       <div className="app-statusbar">
         <StatusBar
           onTerminalToggle={() => setTerminalOpen((v) => !v)}
@@ -335,7 +353,7 @@ interface StatusBarProps {
 }
 
 function StatusBar({ onTerminalToggle, terminalOpen, onProblemsToggle, problemsOpen, onSettingsOpen, onBackToDashboard, userEmail }: StatusBarProps) {
-  const { projectStatus, lastSync, isStreaming, skillLevel, diagnostics } = useStore()
+  const { projectStatus, lastSync, isStreaming, skillLevel, diagnostics, showMinimap, setShowMinimap } = useStore()
 
   const errorCount = diagnostics.filter(d => d.severity === 1).length
   const warnCount = diagnostics.filter(d => d.severity === 2).length
@@ -378,6 +396,13 @@ function StatusBar({ onTerminalToggle, terminalOpen, onProblemsToggle, problemsO
         )}
         <button className="statusbar-icon-btn" onClick={onSettingsOpen} title="설정">
           ⚙
+        </button>
+        <button
+          className={`statusbar-terminal-btn ${showMinimap ? 'active' : ''}`}
+          onClick={() => setShowMinimap(!showMinimap)}
+          title="미니맵 토글"
+        >
+          🗺 맵
         </button>
         <button
           className={`statusbar-terminal-btn ${terminalOpen ? 'active' : ''}`}

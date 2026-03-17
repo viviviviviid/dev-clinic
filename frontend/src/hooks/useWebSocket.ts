@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
+import { WS_BASE } from '../lib/api'
 
 interface WSMessage {
   type: string
@@ -13,7 +14,7 @@ interface WSMessage {
 
 export function useWebSocket() {
   const ws = useRef<WebSocket | null>(null)
-  const { startFeedback, addFeedbackChunk, endFeedback, setLastSync, setStepComplete, setTestResult } = useStore()
+  const { startFeedback, addFeedbackChunk, endFeedback, setLastSync, setStepComplete, setTestResult, setWsStatus, addToast } = useStore()
 
   useEffect(() => {
     let destroyed = false
@@ -21,12 +22,13 @@ export function useWebSocket() {
 
     function connect() {
       if (destroyed) return
-      const url = `ws://${window.location.host}/ws`
+      setWsStatus('reconnecting')
+      const url = `${WS_BASE}/ws`
       const sock = new WebSocket(url)
       ws.current = sock
 
       sock.onopen = () => {
-        console.log('WebSocket connected')
+        setWsStatus('connected')
       }
 
       sock.onmessage = (evt) => {
@@ -54,7 +56,7 @@ export function useWebSocket() {
               setTestResult({ passed: msg.passed ?? false, summary: msg.summary ?? '' })
               break
             case 'error':
-              console.error('WS error from server:', msg.error)
+              addToast(msg.error || 'WebSocket 오류', 'error')
               break
           }
         } catch (e) {
@@ -64,12 +66,12 @@ export function useWebSocket() {
 
       sock.onclose = () => {
         if (destroyed) return
-        console.log('WebSocket closed, reconnecting in 2s')
+        setWsStatus('reconnecting')
         reconnectTimer = setTimeout(connect, 2000)
       }
 
-      sock.onerror = (err) => {
-        console.error('WebSocket error:', err)
+      sock.onerror = () => {
+        setWsStatus('reconnecting')
       }
     }
 
@@ -78,6 +80,7 @@ export function useWebSocket() {
       destroyed = true
       if (reconnectTimer) clearTimeout(reconnectTimer)
       ws.current?.close()
+      setWsStatus('disconnected')
     }
   }, [])
 }

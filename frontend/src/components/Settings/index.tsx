@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { SkillLevel, UserSettings } from '../../store'
 import { supabase } from '../../lib/supabase'
 import './Settings.css'
+import { REMOTE } from '../../lib/api'
 
 const LANGUAGES = ['Go', 'TypeScript', 'JavaScript', 'Rust', 'Python', 'Solidity']
 
@@ -20,7 +21,6 @@ export default function SettingsScreen({ onComplete, initial }: Props) {
   const [activeTab, setActiveTab] = useState<'general' | 'appearance' | 'editor'>('general')
 
   // Settings State
-  const [baseDir, setBaseDir] = useState(initial?.base_dir ?? '')
   const [language, setLanguage] = useState(initial?.language ?? '')
   const [skillLevel, setSkillLevel] = useState<SkillLevel>((initial?.skill_level as SkillLevel) ?? 'normal')
   const [theme, setTheme] = useState('dark') // Visual only for now
@@ -31,8 +31,8 @@ export default function SettingsScreen({ onComplete, initial }: Props) {
   const [error, setError] = useState('')
 
   async function handleSave() {
-    if (!baseDir || !language) {
-      setError('필수 항목(저장 디렉토리, 언어)을 입력해주세요.')
+    if (!language) {
+      setError('언어를 선택해주세요.')
       return
     }
     setLoading(true)
@@ -45,10 +45,10 @@ export default function SettingsScreen({ onComplete, initial }: Props) {
       }
 
       // In a real app we might also save theme, minimap, wordWrap to local store or DB
-      const res = await fetch('/api/user/settings', {
+      const res = await fetch(`${REMOTE}/api/user/settings`, {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ base_dir: baseDir, language, skill_level: skillLevel }),
+        body: JSON.stringify({ language, skill_level: skillLevel }),
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
@@ -68,14 +68,10 @@ export default function SettingsScreen({ onComplete, initial }: Props) {
             <h3>일반 설정</h3>
             <div className="settings-section">
               <label className="settings-label">학습 파일 저장 디렉토리</label>
-              <p className="settings-hint">오늘의 미션이 이 경로 안에 날짜별 폴더로 자동 생성됩니다.</p>
-              <input
-                className="settings-input"
-                type="text"
-                placeholder="/Users/username/daily-coding"
-                value={baseDir}
-                onChange={(e) => setBaseDir(e.target.value)}
-              />
+              <p className="settings-hint">서버 실행 시 CLI 인자로 지정됩니다. (예: <code>coding-tutor ~/learning</code>)</p>
+              {initial?.base_dir && (
+                <p className="settings-hint">현재 경로: <code>{initial.base_dir}</code></p>
+              )}
             </div>
 
             <div className="settings-section">

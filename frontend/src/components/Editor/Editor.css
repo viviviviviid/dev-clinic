@@ -942,3 +942,8 @@
 .nurse-close-btn:hover {
   background: rgba(255,255,255,0.22);
 }
+
+.git-added-gutter {
+  border-left: 3px solid #3fb950;
+  margin-left: 3px;
+}

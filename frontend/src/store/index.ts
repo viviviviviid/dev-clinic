@@ -30,6 +30,8 @@ export interface ProjectStatus {
   tasks: string
   content: string
   skillLevel: string
+  totalSteps: number
+  currentStepNum: number
 }
 
 export type SkillLevel = 'newbie' | 'normal' | 'experienced'
@@ -59,7 +61,7 @@ export type QuizData = Record<string, QuizItem>
 
 export interface UserSettings {
   user_id: string
-  base_dir: string
+  base_dir?: string
   language: string
   skill_level: string
 }
@@ -165,6 +167,19 @@ interface AppState {
   setShowQuickOpen: (v: boolean) => void
   showSearchPanel: boolean
   setShowSearchPanel: (v: boolean) => void
+
+  // Minimap
+  showMinimap: boolean
+  setShowMinimap: (v: boolean) => void
+
+  // Toast notifications
+  toasts: Array<{ id: string; message: string; type: 'error' | 'success' | 'info' }>
+  addToast: (message: string, type?: 'error' | 'success' | 'info') => void
+  removeToast: (id: string) => void
+
+  // WebSocket status
+  wsStatus: 'connected' | 'reconnecting' | 'disconnected'
+  setWsStatus: (s: 'connected' | 'reconnecting' | 'disconnected') => void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -339,4 +354,23 @@ export const useStore = create<AppState>((set, get) => ({
   setShowQuickOpen: (v) => set({ showQuickOpen: v }),
   showSearchPanel: false,
   setShowSearchPanel: (v) => set({ showSearchPanel: v }),
+
+  // Minimap
+  showMinimap: false,
+  setShowMinimap: (v) => set({ showMinimap: v }),
+
+  // Toast
+  toasts: [],
+  addToast: (message, type = 'info') => {
+    const id = Date.now().toString() + Math.random()
+    set((s) => ({ toasts: [...s.toasts, { id, message, type }] }))
+    setTimeout(() => {
+      set((s) => ({ toasts: s.toasts.filter(t => t.id !== id) }))
+    }, 4000)
+  },
+  removeToast: (id) => set((s) => ({ toasts: s.toasts.filter(t => t.id !== id) })),
+
+  // WebSocket status
+  wsStatus: 'disconnected',
+  setWsStatus: (s) => set({ wsStatus: s }),
 }))

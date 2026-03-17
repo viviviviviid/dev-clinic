@@ -10,15 +10,17 @@ import (
 )
 
 type Status struct {
-	Loaded      bool   `json:"loaded"`
-	Dir         string `json:"dir"`
-	Language    string `json:"language"`
-	CurrentStep string `json:"currentStep"`
-	Goal        string `json:"goal"`
-	Concept     string `json:"concept"`
-	Tasks       string `json:"tasks"`
-	Content     string `json:"content"`
-	SkillLevel  string `json:"skillLevel"`
+	Loaded         bool   `json:"loaded"`
+	Dir            string `json:"dir"`
+	Language       string `json:"language"`
+	CurrentStep    string `json:"currentStep"`
+	Goal           string `json:"goal"`
+	Concept        string `json:"concept"`
+	Tasks          string `json:"tasks"`
+	Content        string `json:"content"`
+	SkillLevel     string `json:"skillLevel"`
+	TotalSteps     int    `json:"totalSteps"`
+	CurrentStepNum int    `json:"currentStepNum"`
 }
 
 type Manager struct {
@@ -58,17 +60,39 @@ func (m *Manager) GetStatus() Status {
 	if !m.loaded {
 		return Status{Loaded: false}
 	}
+	total, current := parseProgress(m.content)
 	return Status{
-		Loaded:      true,
-		Dir:         m.dir,
-		Language:    extractSection(m.content, "언어 & 환경"),
-		CurrentStep: extractSection(m.content, "현재 단계"),
-		Goal:        extractSection(m.content, "학습자 목표"),
-		Concept:     extractSection(m.content, "개념 설명"),
-		Tasks:       extractSection(m.content, "현재 과제"),
-		Content:     m.content,
-		SkillLevel:  extractSection(m.content, "학습 수준"),
+		Loaded:         true,
+		Dir:            m.dir,
+		Language:       extractSection(m.content, "언어 & 환경"),
+		CurrentStep:    extractSection(m.content, "현재 단계"),
+		Goal:           extractSection(m.content, "학습자 목표"),
+		Concept:        extractSection(m.content, "개념 설명"),
+		Tasks:          extractSection(m.content, "현재 과제"),
+		Content:        m.content,
+		SkillLevel:     extractSection(m.content, "학습 수준"),
+		TotalSteps:     total,
+		CurrentStepNum: current,
 	}
+}
+
+func parseProgress(content string) (totalSteps, currentStepNum int) {
+	curriculum := extractSection(content, "커리큘럼 단계")
+	completed := 0
+	for _, line := range strings.Split(curriculum, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- [x]") {
+			completed++
+			totalSteps++
+		} else if strings.HasPrefix(trimmed, "- [ ]") {
+			totalSteps++
+		}
+	}
+	currentStepNum = completed + 1
+	if currentStepNum > totalSteps && totalSteps > 0 {
+		currentStepNum = totalSteps
+	}
+	return
 }
 
 func (m *Manager) GetDir() string {

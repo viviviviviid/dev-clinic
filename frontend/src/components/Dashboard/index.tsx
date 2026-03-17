@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useProject } from '../../hooks/useProject'
 import type { TopicSuggestion } from '../../hooks/useProject'
 import { useStore } from '../../store'
@@ -41,7 +41,7 @@ function getFirstDayOfWeek(year: number, month: number) {
 }
 
 export default function DashboardScreen({ onMissionReady, onOpenSettings }: Props) {
-  const { getDailyMission, getDailyHistory, confirmDailyMission, loadProject, deleteProject, nurseChat } = useProject()
+  const { getDailyMission, getDailyHistory, confirmDailyMissionStream, loadProject, deleteProject, nurseChat } = useProject()
   const { userSettings } = useStore()
 
   const today = new Date()
@@ -56,11 +56,11 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     'streak_failed',
   ]
 
-  const [topics, setTopics] = useState<TopicSuggestion[]>([])
+  const [, setTopics] = useState<TopicSuggestion[]>([])
   const [todayMissions, setTodayMissions] = useState<MissionRecord[]>([])
   const [allHistory, setAllHistory] = useState<MissionRecord[]>([])
   const [loading, setLoading] = useState(true)
-  const [confirming, setConfirming] = useState(false)
+  const [, setConfirming] = useState(false)
   const [loadingMissionId, setLoadingMissionId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [selectedDate, setSelectedDate] = useState<string>(todayStr)
@@ -72,6 +72,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const [testScenarioIndex, setTestScenarioIndex] = useState(0)
   const [testModeActive, setTestModeActive] = useState(false)
   const [hoveringMissionId, setHoveringMissionId] = useState<string | null>(null)
+  const [creatingProgress, setCreatingProgress] = useState<{stage: string; message: string} | null>(null)
 
   // Nurse chat state
   const [nurseChatVisible, setNurseChatVisible] = useState(false)
@@ -423,14 +424,18 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     if (!topic || !slug) return
     setConfirming(true)
     setError('')
+    setCreatingProgress({ stage: 'setup', message: '준비 중...' })
     try {
-      const data = await confirmDailyMission(topic, slug)
-      if (data.error) throw new Error(data.error)
+      const data = await confirmDailyMissionStream(topic, slug, (stage, message) => {
+        setCreatingProgress({ stage, message })
+      })
+      if (!data?.project_dir) throw new Error('프로젝트 생성에 실패했습니다')
       onMissionReady(data.project_dir, userSettings?.skill_level || 'normal')
     } catch (e: any) {
       setError(e.message)
     } finally {
       setConfirming(false)
+      setCreatingProgress(null)
     }
   }
 
@@ -453,7 +458,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     const { year, month } = currentMonth
     const daysInMonth = getDaysInMonth(year, month)
     const firstDay = getFirstDayOfWeek(year, month)
-    const cells: JSX.Element[] = []
+    const cells: React.ReactElement[] = []
 
     for (let i = 0; i < firstDay; i++) {
       cells.push(<div key={`empty-${i}`} className="calendar-day empty" />)
@@ -592,6 +597,17 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
             </div>
           </div>
         </div>
+
+        {/* ── 프로젝트 생성 진행 오버레이 ── */}
+        {creatingProgress && (
+          <div className="creation-overlay">
+            <div className="creation-modal">
+              <div className="creation-spinner" />
+              <div className="creation-stage">{creatingProgress.stage === 'curriculum' ? '📚' : creatingProgress.stage === 'code' ? '💻' : creatingProgress.stage === 'quiz' ? '📝' : '⚙️'}</div>
+              <div className="creation-message">{creatingProgress.message}</div>
+            </div>
+          </div>
+        )}
 
         {/* ── VN 인트로 오버레이 ── */}
         {vnVisible && (

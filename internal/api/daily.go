@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"strings"
+
 	"github.com/coding-tutor/internal/ai"
+	"github.com/coding-tutor/internal/config"
 	"github.com/coding-tutor/internal/project"
 	"github.com/coding-tutor/internal/supabase"
 	"github.com/coding-tutor/internal/watcher"
@@ -113,7 +116,7 @@ func ConfirmDaily(c *gin.Context) {
 		return
 	}
 
-	// Get user settings
+	// Get user settings (language + skill_level only; base_dir from config)
 	var settings []UserSettings
 	if err := supabase.Get(
 		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID),
@@ -126,7 +129,7 @@ func ConfirmDaily(c *gin.Context) {
 
 	// Calculate project dir: {base_dir}/{YYMMDD}-{Slug}
 	dateStr := time.Now().Format("060102")
-	projectDir := filepath.Join(s.BaseDir, fmt.Sprintf("%s-%s", dateStr, req.Slug))
+	projectDir := filepath.Join(config.Global.BaseDir, fmt.Sprintf("%s-%s", dateStr, req.Slug))
 
 	if err := os.MkdirAll(projectDir, 0755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -188,6 +191,9 @@ func ConfirmDaily(c *gin.Context) {
 
 	// Load project and start watcher
 	project.Global.Set(projectDir, curriculum)
+	if ai.Global != nil {
+		ai.Global.SetToken(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+	}
 	if err := watcher.Start(projectDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
 		return
@@ -210,6 +216,110 @@ func ConfirmDaily(c *gin.Context) {
 		"project_dir": projectDir,
 		"files":       created,
 	})
+}
+
+func ConfirmDailyStream(c *gin.Context) {
+	userID := c.GetString("user_id")
+
+	var req ConfirmDailyReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	sendProgress := func(stage, msg string) {
+		data, _ := json.Marshal(map[string]string{"stage": stage, "message": msg})
+		fmt.Fprintf(c.Writer, "event: progress\ndata: %s\n\n", data)
+		flusher.Flush()
+	}
+	sendError := func(msg string) {
+		data, _ := json.Marshal(map[string]string{"error": msg})
+		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	sendProgress("setup", "사용자 설정 불러오는 중...")
+
+	var settings []UserSettings
+	if err := supabase.Get(
+		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID),
+		&settings,
+	); err != nil || len(settings) == 0 {
+		sendError("사용자 설정을 찾을 수 없습니다")
+		return
+	}
+	s := settings[0]
+
+	if ai.Global == nil {
+		sendError("AI 클라이언트가 초기화되지 않았습니다")
+		return
+	}
+
+	sendProgress("curriculum", "AI가 커리큘럼을 생성하고 있습니다...")
+	curriculum, err := ai.Global.GenerateCurriculum(c.Request.Context(), s.Language, req.Topic, s.SkillLevel)
+	if err != nil {
+		sendError("커리큘럼 생성 실패: " + err.Error())
+		return
+	}
+
+	sendProgress("code", "코드 파일을 생성하고 있습니다...")
+	files, err := ai.Global.GenerateCodeFiles(c.Request.Context(), curriculum, nil)
+	if err != nil {
+		sendError("코드 생성 실패: " + err.Error())
+		return
+	}
+
+	// Build all-files map (browser will write these via LOCAL /api/project/setup)
+	allFiles := make(map[string]string, len(files)+1)
+	allFiles["TUTORSYS.md"] = curriculum
+	for k, v := range files {
+		allFiles[k] = v
+	}
+
+	if s.SkillLevel == "newbie" {
+		sendProgress("quiz", "퀴즈 데이터를 생성하고 있습니다...")
+		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), curriculum, files)
+		if err == nil && len(quizData) > 0 {
+			if quizBytes, err := json.Marshal(quizData); err == nil {
+				allFiles["quiz.json"] = string(quizBytes)
+			}
+		}
+	}
+
+	// Insert Supabase record — project_dir stores dir_suffix (local server prepends BaseDir)
+	dateStr := time.Now().Format("060102")
+	dirSuffix := dateStr + "-" + req.Slug
+	today := time.Now().Format("2006-01-02")
+	mission := DailyMission{
+		UserID:     userID,
+		Date:       today,
+		Topic:      req.Topic,
+		Slug:       req.Slug,
+		ProjectDir: dirSuffix,
+		Status:     "active",
+	}
+	supabase.Insert("daily_missions", mission)
+
+	doneData, _ := json.Marshal(map[string]interface{}{
+		"dir_suffix":  dirSuffix,
+		"files":       allFiles,
+		"curriculum":  curriculum,
+		"skill_level": s.SkillLevel,
+		"language":    s.Language,
+	})
+	fmt.Fprintf(c.Writer, "event: done\ndata: %s\n\n", doneData)
+	flusher.Flush()
 }
 
 type NurseChatReq struct {

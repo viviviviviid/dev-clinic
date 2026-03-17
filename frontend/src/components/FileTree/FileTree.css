@@ -79,3 +79,99 @@
   background: #f0883e;
   flex-shrink: 0;
 }
+
+/* ── Context menu ── */
+.filetree-ctx-menu {
+  position: fixed;
+  z-index: 500;
+  background: #1c2128;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  padding: 4px 0;
+  min-width: 140px;
+}
+
+.ctx-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #e6edf3;
+  font-size: 13px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.ctx-menu-item:hover { background: #21262d; }
+.ctx-menu-item.ctx-menu-danger { color: #f85149; }
+.ctx-menu-item.ctx-menu-danger:hover { background: rgba(248,81,73,0.1); }
+
+/* ── Rename modal ── */
+.filetree-rename-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.filetree-rename-box {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  min-width: 320px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.filetree-rename-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #8b949e;
+}
+
+.filetree-rename-input {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+  width: 100%;
+}
+.filetree-rename-input:focus { border-color: #58a6ff; }
+
+.filetree-rename-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.filetree-rename-ok {
+  background: #1f6feb;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.filetree-rename-ok:hover { background: #388bfd; }
+
+.filetree-rename-cancel {
+  background: none;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #8b949e;
+  font-size: 12px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.filetree-rename-cancel:hover { color: #e6edf3; border-color: #6e7681; }

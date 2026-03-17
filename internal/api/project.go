@@ -13,7 +13,6 @@ import (
 
 	"github.com/coding-tutor/internal/ai"
 	"github.com/coding-tutor/internal/project"
-	"github.com/coding-tutor/internal/snapshot"
 	"github.com/coding-tutor/internal/supabase"
 	"github.com/coding-tutor/internal/watcher"
 	"github.com/gin-gonic/gin"
@@ -49,10 +48,6 @@ func hasGoFiles(files map[string]string) bool {
 		}
 	}
 	return false
-}
-
-func GetProjectStatus(c *gin.Context) {
-	c.JSON(http.StatusOK, project.Global.GetStatus())
 }
 
 type CreateProjectReq struct {
@@ -92,6 +87,8 @@ type ConfirmProjectReq struct {
 	SkillLevel string `json:"skillLevel"`
 }
 
+// ConfirmProject generates code files from a curriculum and returns them.
+// The caller (browser) is responsible for writing files via LOCAL /api/project/setup.
 func ConfirmProject(c *gin.Context) {
 	var req ConfirmProjectReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -104,90 +101,33 @@ func ConfirmProject(c *gin.Context) {
 		return
 	}
 
-	// Write TUTORSYS.md
-	tutorPath := filepath.Join(req.Dir, "TUTORSYS.md")
-	if err := os.WriteFile(tutorPath, []byte(req.Curriculum), 0644); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Generate code files
 	files, err := ai.Global.GenerateCodeFiles(c.Request.Context(), req.Curriculum, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Write code files
-	created := []string{}
-	for name, content := range files {
-		path := filepath.Join(req.Dir, name)
-		dir := filepath.Dir(path)
-		os.MkdirAll(dir, 0755)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		created = append(created, name)
+	allFiles := make(map[string]string, len(files)+1)
+	allFiles["TUTORSYS.md"] = req.Curriculum
+	for k, v := range files {
+		allFiles[k] = v
 	}
 
-	// Run go mod init/tidy for Go projects (non-fatal)
-	if hasGoFiles(files) {
-		if err := ensureGoMod(req.Dir); err != nil {
-			fmt.Printf("go mod: %v\n", err)
-		}
-	}
-
-	// Generate quiz data for newbie level
 	if req.SkillLevel == "newbie" {
 		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), req.Curriculum, files)
 		if err == nil && len(quizData) > 0 {
 			quizBytes, jsonErr := json.Marshal(quizData)
 			if jsonErr == nil {
-				quizPath := filepath.Join(req.Dir, "quiz.json")
-				os.WriteFile(quizPath, quizBytes, 0644)
+				allFiles["quiz.json"] = string(quizBytes)
 			}
 		}
 	}
 
-	// Load project
-	project.Global.Set(req.Dir, req.Curriculum)
-
-	// Start watcher
-	if err := watcher.Start(req.Dir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":    true,
-		"files": created,
+		"files": allFiles,
 		"dir":   req.Dir,
 	})
-}
-
-type LoadProjectReq struct {
-	Dir string `json:"dir"`
-}
-
-func LoadProject(c *gin.Context) {
-	var req LoadProjectReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := project.Global.Load(req.Dir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := watcher.Start(req.Dir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, project.Global.GetStatus())
 }
 
 func findNextStep(content, currentStep string) (string, string) {
@@ -216,7 +156,6 @@ func findNextStep(content, currentStep string) (string, string) {
 			}
 		}
 	}
-	// currentStep이 "Step 2: 설명" 형태일 수 있으므로 label만 추출해서 비교
 	currentLabel := currentStep
 	if idx := strings.Index(currentStep, ":"); idx > 0 {
 		currentLabel = strings.TrimSpace(currentStep[:idx])
@@ -229,114 +168,173 @@ func findNextStep(content, currentStep string) (string, string) {
 	return "", ""
 }
 
-func AdvanceToNextStep(c *gin.Context) {
-	if !project.Global.IsLoaded() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "project not loaded"})
-		return
+// extractCurrentStepFromContent parses the "현재 단계" section from TUTORSYS.md content.
+func extractCurrentStepFromContent(content string) string {
+	lines := strings.Split(content, "\n")
+	inSection := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "## 현재 단계") {
+			inSection = true
+			continue
+		}
+		if inSection {
+			if strings.HasPrefix(line, "## ") {
+				break
+			}
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" {
+				return trimmed
+			}
+		}
 	}
+	return "Step 1"
+}
 
+// NextStepReq is sent by the browser with the current project state.
+// The home server generates the next step and returns new files without touching disk.
+type NextStepReq struct {
+	Curriculum   string            `json:"curriculum"`
+	CurrentFiles map[string]string `json:"current_files"`
+	SkillLevel   string            `json:"skill_level"`
+}
+
+func AdvanceToNextStep(c *gin.Context) {
 	if ai.Global == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI client not initialized"})
 		return
 	}
 
-	status := project.Global.GetStatus()
-	nextLabel, nextFull := findNextStep(status.Content, status.CurrentStep)
+	var req NextStepReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentStep := extractCurrentStepFromContent(req.Curriculum)
+	nextLabel, nextFull := findNextStep(req.Curriculum, currentStep)
 	if nextLabel == "" {
 		c.JSON(http.StatusOK, gin.H{"done": true, "message": "모든 단계를 완료했습니다"})
 		return
 	}
 
-	dir := project.Global.GetDir()
-
-	// 현재 코드 파일 읽기 (소스 + 테스트 모두 포함) — GenerateNextStep과 GenerateCodeFiles에서 사용
-	currentFiles := map[string]string{}
-	if entries, err := os.ReadDir(dir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() || e.Name() == "TUTORSYS.md" || e.Name() == "quiz.json" {
-				continue
-			}
-			name := e.Name()
-			data, rerr := os.ReadFile(filepath.Join(dir, name))
-			if rerr == nil {
-				currentFiles[name] = string(data)
-			}
-		}
-	}
-
-	newCurriculum, err := ai.Global.GenerateNextStep(c.Request.Context(), status.Content, nextFull, currentFiles)
+	newCurriculum, err := ai.Global.GenerateNextStep(c.Request.Context(), req.Curriculum, nextFull, req.CurrentFiles)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 현재 단계 스냅샷 저장 (비치명적 — 실패해도 진행)
-	_ = snapshot.Save(dir, status.CurrentStep)
-
-	tutorPath := filepath.Join(dir, "TUTORSYS.md")
-	if err := os.WriteFile(tutorPath, []byte(newCurriculum), 0644); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	files, err := ai.Global.GenerateCodeFiles(c.Request.Context(), newCurriculum, currentFiles)
+	files, err := ai.Global.GenerateCodeFiles(c.Request.Context(), newCurriculum, req.CurrentFiles)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	for name, content := range files {
-		path := filepath.Join(dir, name)
-		os.MkdirAll(filepath.Dir(path), 0755)
-		os.WriteFile(path, []byte(content), 0644)
+	// Include TUTORSYS.md so the local server can write it
+	allFiles := make(map[string]string, len(files)+1)
+	allFiles["TUTORSYS.md"] = newCurriculum
+	for k, v := range files {
+		allFiles[k] = v
 	}
 
-	if status.SkillLevel == "newbie" {
+	resp := gin.H{
+		"new_curriculum": newCurriculum,
+		"new_files":      allFiles,
+	}
+
+	if req.SkillLevel == "newbie" {
 		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), newCurriculum, files)
 		if err == nil && len(quizData) > 0 {
-			quizBytes, jsonErr := json.Marshal(quizData)
-			if jsonErr == nil {
-				os.WriteFile(filepath.Join(dir, "quiz.json"), quizBytes, 0644)
-			}
+			resp["quiz_data"] = quizData
 		}
 	}
 
-	// Run go mod tidy for Go projects (non-fatal)
-	if status.Language == "go" {
-		if err := ensureGoMod(dir); err != nil {
-			fmt.Printf("go mod: %v\n", err)
+	c.JSON(http.StatusOK, resp)
+}
+
+type CompleteProjectReq struct {
+	ProjectDir string `json:"project_dir"`
+}
+
+func CompleteProject(c *gin.Context) {
+	userID := c.GetString("user_id")
+
+	var req CompleteProjectReq
+	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectDir == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_dir required"})
+		return
+	}
+
+	// Match by exact path first, then by dir_suffix
+	path := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, req.ProjectDir)
+	if err := supabase.Patch(path, map[string]string{"status": "completed"}); err != nil {
+		suffix := req.ProjectDir
+		if idx := strings.LastIndex(req.ProjectDir, "/"); idx >= 0 {
+			suffix = req.ProjectDir[idx+1:]
+		}
+		path2 := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, suffix)
+		if err2 := supabase.Patch(path2, map[string]string{"status": "completed"}); err2 != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
 	}
 
-	project.Global.Set(dir, newCurriculum)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
 
-	if err := watcher.Start(dir); err != nil {
+type DeleteProjectReq struct {
+	ProjectDir string `json:"project_dir"`
+}
+
+func DeleteProject(c *gin.Context) {
+	userID := c.GetString("user_id")
+	var req DeleteProjectReq
+	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectDir == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_dir required"})
+		return
+	}
+
+	// Remove from DB — match by exact path or by dir_suffix
+	_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, req.ProjectDir))
+	if idx := strings.LastIndex(req.ProjectDir, "/"); idx >= 0 {
+		suffix := req.ProjectDir[idx+1:]
+		_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, suffix))
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ---- kept for single-binary backward compat (used by cmd/server when AI is local) ----
+
+func GetProjectStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, project.Global.GetStatus())
+}
+
+type LoadProjectReq struct {
+	Dir        string `json:"dir"`
+	AIProxyURL string `json:"ai_proxy_url,omitempty"`
+}
+
+func LoadProject(c *gin.Context) {
+	var req LoadProjectReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := project.Global.Load(req.Dir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if ai.Global != nil {
+		ai.Global.SetToken(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+	}
+	if err := watcher.Start(req.Dir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, project.Global.GetStatus())
-}
-
-func CompleteProject(c *gin.Context) {
-	if !project.Global.IsLoaded() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "project not loaded"})
-		return
-	}
-	userID := c.GetString("user_id")
-	dir := project.Global.GetDir()
-
-	// daily_missions에서 project_dir 일치하는 미션 status를 completed로 업데이트
-	path := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, dir)
-	if err := supabase.Patch(path, map[string]string{"status": "completed"}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if watcher.Global != nil {
-		watcher.Global.Stop()
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func GetQuiz(c *gin.Context) {
@@ -352,89 +350,4 @@ func GetQuiz(c *gin.Context) {
 		return
 	}
 	c.Data(http.StatusOK, "application/json", data)
-}
-
-type RestoreSnapshotReq struct {
-	Step string `json:"step"`
-}
-
-func RestoreSnapshot(c *gin.Context) {
-	if !project.Global.IsLoaded() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "project not loaded"})
-		return
-	}
-	var req RestoreSnapshotReq
-	if err := c.ShouldBindJSON(&req); err != nil || req.Step == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "step required"})
-		return
-	}
-	dir := project.Global.GetDir()
-	if err := snapshot.Restore(dir, req.Step); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	// TUTORSYS.md를 다시 로드
-	if err := project.Global.Load(dir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "reload: " + err.Error()})
-		return
-	}
-	if err := watcher.Start(dir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "step": req.Step})
-}
-
-func ListSnapshots(c *gin.Context) {
-	if !project.Global.IsLoaded() {
-		c.JSON(http.StatusOK, gin.H{"snapshots": []string{}})
-		return
-	}
-	dir := project.Global.GetDir()
-	labels, err := snapshot.List(dir)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"snapshots": labels})
-}
-
-type DeleteProjectReq struct {
-	ProjectDir string `json:"project_dir"`
-}
-
-func DeleteProject(c *gin.Context) {
-	userID := c.GetString("user_id")
-	var req DeleteProjectReq
-	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectDir == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "project_dir required"})
-		return
-	}
-
-	// Security: must be within user's base_dir
-	var settings []UserSettings
-	if err := supabase.Get(fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID), &settings); err != nil || len(settings) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "user settings not found"})
-		return
-	}
-	if !strings.HasPrefix(req.ProjectDir, settings[0].BaseDir) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
-		return
-	}
-
-	// Stop watcher if it's running on this project
-	if watcher.Global != nil {
-		watcher.Global.Stop()
-	}
-
-	// Remove files
-	if err := os.RemoveAll(req.ProjectDir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Remove from DB (non-fatal)
-	_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, req.ProjectDir))
-
-	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

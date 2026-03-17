@@ -1,4 +1,5 @@
 // LSP JSON-RPC 2.0 client over WebSocket
+import { WS_BASE } from './api'
 
 interface Location {
   uri: string
@@ -98,9 +99,7 @@ class LspClient {
   async connect(lang: string, rootPath: string, token: string): Promise<void> {
     this.disconnect()
 
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const host = window.location.host
-    const url = `${proto}://${host}/ws/lsp?lang=${encodeURIComponent(lang)}&root=${encodeURIComponent(rootPath)}&token=${encodeURIComponent(token)}`
+    const url = `${WS_BASE}/ws/lsp?lang=${encodeURIComponent(lang)}&root=${encodeURIComponent(rootPath)}&token=${encodeURIComponent(token)}`
 
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url)

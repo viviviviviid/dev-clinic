@@ -2,10 +2,15 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -203,6 +208,117 @@ func WriteFile(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+type RenameReq struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+func RenameFile(c *gin.Context) {
+	var req RenameReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.From == "" || req.To == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to required"})
+		return
+	}
+	if err := os.Rename(req.From, req.To); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+type DeleteFileReq struct {
+	Path string `json:"path"`
+}
+
+func DeleteFsEntry(c *gin.Context) {
+	var req DeleteFileReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path required"})
+		return
+	}
+	info, err := os.Stat(req.Path)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if info.IsDir() {
+		err = os.RemoveAll(req.Path)
+	} else {
+		err = os.Remove(req.Path)
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+type DiffLine struct {
+	LineNum int    `json:"lineNum"`
+	DType   string `json:"type"` // "added" | "deleted"
+}
+
+func GitDiff(c *gin.Context) {
+	filePath := c.Query("path")
+	dir := c.Query("dir")
+	if filePath == "" || dir == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path and dir required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "diff", "HEAD", "--", filePath)
+	cmd.Dir = dir
+	out, _ := cmd.Output()
+	if len(out) == 0 {
+		// Try staged diff too
+		cmd2 := exec.CommandContext(ctx, "git", "diff", "--cached", "HEAD", "--", filePath)
+		cmd2.Dir = dir
+		out, _ = cmd2.Output()
+	}
+
+	lines := parseGitDiff(string(out))
+	if lines == nil {
+		lines = []DiffLine{}
+	}
+	c.JSON(http.StatusOK, lines)
+}
+
+func parseGitDiff(diff string) []DiffLine {
+	var result []DiffLine
+	hunkRe := regexp.MustCompile(`@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+	newLine := 0
+	for _, line := range strings.Split(diff, "\n") {
+		if m := hunkRe.FindStringSubmatch(line); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			newLine = n
+			continue
+		}
+		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "\\") {
+			continue
+		}
+		if strings.HasPrefix(line, "+") {
+			result = append(result, DiffLine{LineNum: newLine, DType: "added"})
+			newLine++
+		} else if strings.HasPrefix(line, "-") {
+			result = append(result, DiffLine{LineNum: newLine, DType: "deleted"})
+		} else {
+			newLine++
+		}
+	}
+	return result
 }
 
 func ValidateDir(c *gin.Context) {

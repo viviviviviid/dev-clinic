@@ -14,10 +14,16 @@ type SupabaseConfig struct {
 	JWTSecret      string `toml:"jwt_secret"`
 }
 
+type RemoteConfig struct {
+	AIUrl string `toml:"ai_url"` // e.g. https://tutor.abcfe.net/api/ai/proxy
+}
+
 type Config struct {
 	Gemini   GeminiConfig   `toml:"gemini"`
 	Server   ServerConfig   `toml:"server"`
 	Supabase SupabaseConfig `toml:"supabase"`
+	Remote   RemoteConfig   `toml:"remote"`
+	BaseDir  string
 }
 
 type GeminiConfig struct {
@@ -29,12 +35,22 @@ type ServerConfig struct {
 	Port string `toml:"port"`
 }
 
+// Build-time defaults — overridden via -ldflags at build time.
+// These allow distributing a zero-config binary to users.
+var (
+	DefaultSupabaseURL            = ""
+	DefaultSupabaseAnonKey        = ""
+	DefaultSupabaseServiceRoleKey = ""
+	DefaultSupabaseJWTSecret      = ""
+	DefaultRemoteAIUrl            = ""
+)
+
 var Global = &Config{
 	Gemini: GeminiConfig{
 		Model: "gemini-2.5-flash-lite-preview-06-17",
 	},
 	Server: ServerConfig{
-		Port: "8080",
+		Port: "47291",
 	},
 }
 
@@ -74,5 +90,31 @@ func applyEnv() {
 	}
 	if v := os.Getenv("SUPABASE_JWT_SECRET"); v != "" {
 		Global.Supabase.JWTSecret = v
+	}
+	if v := os.Getenv("BASE_DIR"); v != "" {
+		Global.BaseDir = v
+	}
+	if v := os.Getenv("REMOTE_AI_URL"); v != "" {
+		Global.Remote.AIUrl = v
+	}
+	applyBuildDefaults()
+}
+
+// applyBuildDefaults fills in values from ldflags if not already set.
+func applyBuildDefaults() {
+	if Global.Supabase.URL == "" && DefaultSupabaseURL != "" {
+		Global.Supabase.URL = DefaultSupabaseURL
+	}
+	if Global.Supabase.AnonKey == "" && DefaultSupabaseAnonKey != "" {
+		Global.Supabase.AnonKey = DefaultSupabaseAnonKey
+	}
+	if Global.Supabase.ServiceRoleKey == "" && DefaultSupabaseServiceRoleKey != "" {
+		Global.Supabase.ServiceRoleKey = DefaultSupabaseServiceRoleKey
+	}
+	if Global.Supabase.JWTSecret == "" && DefaultSupabaseJWTSecret != "" {
+		Global.Supabase.JWTSecret = DefaultSupabaseJWTSecret
+	}
+	if Global.Remote.AIUrl == "" && DefaultRemoteAIUrl != "" {
+		Global.Remote.AIUrl = DefaultRemoteAIUrl
 	}
 }

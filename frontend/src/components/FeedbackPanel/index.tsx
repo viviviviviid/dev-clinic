@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useStore } from '../../store'
 import { useProject } from '../../hooks/useProject'
+import Confetti from '../Confetti'
 import './FeedbackPanel.css'
 
 type Tab = 'feedback' | 'tasks' | 'chat'
@@ -14,6 +15,7 @@ export default function FeedbackPanel() {
   const [chatInput, setChatInput] = useState('')
   const [showSnapshotMenu, setShowSnapshotMenu] = useState(false)
   const [restoringStep, setRestoringStep] = useState<string | null>(null)
+  const [showConfetti, setShowConfetti] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const {
@@ -64,7 +66,6 @@ export default function FeedbackPanel() {
           const quiz = await loadQuizData()
           setQuizData(quiz)
         }
-        // 스냅샷 목록 갱신
         const snaps = await listSnapshots()
         setSnapshots(snaps)
       }
@@ -164,6 +165,14 @@ export default function FeedbackPanel() {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight
     }
   }, [chatMessages.length, isChatStreaming, tab])
+
+  const prevStepComplete = useRef(false)
+  useEffect(() => {
+    if (stepComplete && testResult?.passed && !prevStepComplete.current) {
+      setShowConfetti(true)
+    }
+    prevStepComplete.current = !!(stepComplete && testResult?.passed)
+  }, [stepComplete, testResult?.passed])
 
   return (
     <div className="feedback-panel">
@@ -268,6 +277,26 @@ export default function FeedbackPanel() {
             <div className="feedback-empty"><p>프로젝트를 먼저 로드하세요.</p></div>
           ) : (
             <div className="tasks-panel">
+              {/* 진행률 */}
+              {projectStatus.totalSteps > 0 && (
+                <section className="tasks-section tasks-progress-section">
+                  <div className="tasks-progress-header">
+                    <span className="tasks-progress-label">
+                      {projectStatus.currentStepNum} / {projectStatus.totalSteps} 단계
+                    </span>
+                    <span className="tasks-progress-pct">
+                      {Math.round((projectStatus.currentStepNum / projectStatus.totalSteps) * 100)}%
+                    </span>
+                  </div>
+                  <div className="tasks-progress-bar">
+                    <div
+                      className="tasks-progress-fill"
+                      style={{ width: `${(projectStatus.currentStepNum / projectStatus.totalSteps) * 100}%` }}
+                    />
+                  </div>
+                </section>
+              )}
+
               {/* 목표 */}
               <section className="tasks-section">
                 <h3 className="tasks-section-title">🎯 학습 목표</h3>
@@ -342,6 +371,8 @@ export default function FeedbackPanel() {
           )}
         </div>
       )}
+
+      {showConfetti && <Confetti onDone={() => setShowConfetti(false)} />}
 
       {/* 채팅 탭 */}
       {tab === 'chat' && (

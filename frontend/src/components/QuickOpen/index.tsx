@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useStore } from '../../store'
 import { supabase } from '../../lib/supabase'
+import { LOCAL } from '../../lib/api'
 
 interface FileMatch {
   relPath: string
@@ -74,7 +75,7 @@ export default function QuickOpen() {
   async function openFile(absPath: string) {
     const headers = await authHeaders()
     try {
-      const res = await fetch(`/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
+      const res = await fetch(`${LOCAL}/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
       const data = await res.json()
       addTab(absPath, data.content || '')
     } catch { /* ignore */ }

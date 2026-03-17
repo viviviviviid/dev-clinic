@@ -1,23 +1,63 @@
 package ai
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/coding-tutor/internal/config"
 	"google.golang.org/genai"
 )
 
 type Client struct {
-	client *genai.Client
+	client   *genai.Client // nil when using proxy
+	proxyURL string
+	mu       sync.RWMutex
+	token    string // Supabase JWT — set on project load, used by watcher
+}
+
+// SetToken stores the current user's Supabase JWT for use by background AI calls (watcher).
+func (c *Client) SetToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.token = token
+}
+
+func (c *Client) getToken() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.token
 }
 
 var Global *Client
 
+// InitProxy initialises the AI client in proxy mode at runtime.
+// Called by the local server when it receives ai_proxy_url from the browser.
+func InitProxy(proxyURL string) {
+	Global = &Client{proxyURL: proxyURL}
+	log.Printf("ai: proxy mode → %s", proxyURL)
+}
+
 func Init() {
 	cfg := config.Global.Gemini
+	remote := config.Global.Remote
+
+	if remote.AIUrl != "" {
+		// Proxy mode: no local Gemini client needed
+		Global = &Client{proxyURL: remote.AIUrl}
+		log.Printf("ai: proxy mode → %s", remote.AIUrl)
+		return
+	}
+	if cfg.APIKey == "" {
+		panic("ai: GEMINI_API_KEY not set and no remote.ai_url configured")
+	}
 	ctx := context.Background()
 	c, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  cfg.APIKey,
@@ -45,6 +85,165 @@ type QuizItem struct {
 	Options     []QuizOption `json:"options"`
 	CorrectCode string       `json:"correctCode"`
 	Hints       []string     `json:"hints"` // 3단계 힌트: 개념 → 구조 → 거의 다
+}
+
+// stream dispatches to proxy or direct Gemini
+func (c *Client) stream(ctx context.Context, system, prompt string, cb StreamCallback) error {
+	if c.proxyURL != "" {
+		return c.streamViaProxy(ctx, system, prompt, cb)
+	}
+	cfg := &genai.GenerateContentConfig{}
+	if system != "" {
+		cfg.SystemInstruction = genai.NewContentFromText(system, genai.RoleUser)
+	}
+	for chunk, err := range c.client.Models.GenerateContentStream(ctx, config.Global.Gemini.Model, genai.Text(prompt), cfg) {
+		if err != nil {
+			return err
+		}
+		if chunk.Candidates != nil {
+			for _, cand := range chunk.Candidates {
+				if cand.Content != nil {
+					for _, part := range cand.Content.Parts {
+						if part.Text != "" {
+							cb(part.Text)
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// generate dispatches to proxy or direct Gemini
+func (c *Client) generate(ctx context.Context, prompt string) (string, error) {
+	if c.proxyURL != "" {
+		return c.generateViaProxy(ctx, prompt)
+	}
+	resp, err := c.client.Models.GenerateContent(ctx, config.Global.Gemini.Model, genai.Text(prompt), nil)
+	if err != nil {
+		return "", err
+	}
+	return resp.Text(), nil
+}
+
+// streamViaProxy calls the home server proxy with SSE
+func (c *Client) streamViaProxy(ctx context.Context, system, prompt string, cb StreamCallback) error {
+	body, _ := json.Marshal(map[string]interface{}{
+		"system": system,
+		"prompt": prompt,
+		"stream": true,
+	})
+	req, err := http.NewRequestWithContext(ctx, "POST", c.proxyURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.getToken())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("proxy error %d: %s", resp.StatusCode, b)
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[6:]
+		if data == "[DONE]" {
+			break
+		}
+		var msg struct {
+			Text  string `json:"text"`
+			Error string `json:"error"`
+		}
+		if json.Unmarshal([]byte(data), &msg) == nil {
+			if msg.Error != "" {
+				return fmt.Errorf("proxy: %s", msg.Error)
+			}
+			if msg.Text != "" {
+				cb(msg.Text)
+			}
+		}
+	}
+	return scanner.Err()
+}
+
+// generateViaProxy calls the home server proxy for non-streaming
+func (c *Client) generateViaProxy(ctx context.Context, prompt string) (string, error) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"system": "",
+		"prompt": prompt,
+		"stream": false,
+	})
+	req, err := http.NewRequestWithContext(ctx, "POST", c.proxyURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.getToken())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("proxy error %d: %s", resp.StatusCode, b)
+	}
+	var result struct {
+		Text  string `json:"text"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if result.Error != "" {
+		return "", fmt.Errorf("proxy: %s", result.Error)
+	}
+	return result.Text, nil
+}
+
+// RawStream is called by the home server's AI proxy handler to call Gemini directly.
+func (c *Client) RawStream(ctx context.Context, system, prompt string, cb StreamCallback) error {
+	// Always direct — proxy handler on home server never has proxyURL set
+	cfg := &genai.GenerateContentConfig{}
+	if system != "" {
+		cfg.SystemInstruction = genai.NewContentFromText(system, genai.RoleUser)
+	}
+	for chunk, err := range c.client.Models.GenerateContentStream(ctx, config.Global.Gemini.Model, genai.Text(prompt), cfg) {
+		if err != nil {
+			return err
+		}
+		if chunk.Candidates != nil {
+			for _, cand := range chunk.Candidates {
+				if cand.Content != nil {
+					for _, part := range cand.Content.Parts {
+						if part.Text != "" {
+							cb(part.Text)
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// RawGenerate is called by the home server's AI proxy handler to call Gemini directly.
+func (c *Client) RawGenerate(ctx context.Context, prompt string) (string, error) {
+	resp, err := c.client.Models.GenerateContent(ctx, config.Global.Gemini.Model, genai.Text(prompt), nil)
+	if err != nil {
+		return "", err
+	}
+	return resp.Text(), nil
 }
 
 func (c *Client) StreamFeedback(ctx context.Context, tutorContent, diffContent, changedFilesCode, testOutput string, history []string, skillLevel string, cb StreamCallback) error {
@@ -129,29 +328,7 @@ func (c *Client) StreamFeedback(ctx context.Context, tutorContent, diffContent, 
 위 diff를 기준으로, 학습자가 방금 수정한 내용에 대해서만 피드백해주세요.
 diff에 없는 기존 코드는 AI가 미리 작성한 템플릿이므로 평가 대상이 아닙니다.`, tutorContent, historySection, testSection, diffContent, changedFilesCode)
 
-	model := config.Global.Gemini.Model
-	cfg := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
-	}
-	for chunk, err := range c.client.Models.GenerateContentStream(ctx, model,
-		genai.Text(userMsg), cfg,
-	) {
-		if err != nil {
-			return err
-		}
-		if chunk.Candidates != nil {
-			for _, cand := range chunk.Candidates {
-				if cand.Content != nil {
-					for _, part := range cand.Content.Parts {
-						if part.Text != "" {
-							cb(part.Text)
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
+	return c.stream(ctx, systemPrompt, userMsg, cb)
 }
 
 type ChatMessage struct {
@@ -201,27 +378,7 @@ func (c *Client) StreamChat(ctx context.Context, tutorContent, fileContent strin
 ## 학습자 질문
 %s`, tutorContent, fileSection, historySection, chatSection, userMessage)
 
-	model := config.Global.Gemini.Model
-	cfg := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
-	}
-	for chunk, err := range c.client.Models.GenerateContentStream(ctx, model, genai.Text(userMsg), cfg) {
-		if err != nil {
-			return err
-		}
-		if chunk.Candidates != nil {
-			for _, cand := range chunk.Candidates {
-				if cand.Content != nil {
-					for _, part := range cand.Content.Parts {
-						if part.Text != "" {
-							cb(part.Text)
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
+	return c.stream(ctx, systemPrompt, userMsg, cb)
 }
 
 func (c *Client) GenerateCurriculum(ctx context.Context, language, topic, skillLevel string) (string, error) {
@@ -309,12 +466,7 @@ Step 1
 []
 ---`, language, topic, skillLevelKr, language, skillLevel)
 
-	model := config.Global.Gemini.Model
-	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)
-	if err != nil {
-		return "", err
-	}
-	return resp.Text(), nil
+	return c.generate(ctx, prompt)
 }
 
 func (c *Client) GenerateCodeFiles(ctx context.Context, tutorContent string, existingFiles map[string]string) (map[string]string, error) {
@@ -445,12 +597,11 @@ TUTORSYS.md의 "## 학습 수준" 값을 반드시 확인하고, 그에 맞게 H
 [파일 내용]
 ===END===`, tutorContent, existingSection)
 
-	model := config.Global.Gemini.Model
-	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)
+	text, err := c.generate(ctx, prompt)
 	if err != nil {
 		return nil, err
 	}
-	return parseCodeFiles(resp.Text()), nil
+	return parseCodeFiles(text), nil
 }
 
 func (c *Client) GenerateQuizData(ctx context.Context, tutorContent string, codeFiles map[string]string) (map[string]QuizItem, error) {
@@ -580,13 +731,12 @@ JSON만 출력하세요. 마크다운 코드블록 없이:
   }
 }`, tutorContent, markerList.String())
 
-	model := config.Global.Gemini.Model
-	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)
+	text, err := c.generate(ctx, prompt)
 	if err != nil {
 		return nil, err
 	}
 
-	raw := extractJSON(resp.Text())
+	raw := extractJSON(text)
 	var result map[string]QuizItem
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return nil, fmt.Errorf("quiz JSON parse error: %w\nraw: %s", err, raw)
@@ -639,27 +789,7 @@ func (c *Client) NurseChat(ctx context.Context, message string, history []NurseC
 	}
 	prompt := historyStr + "학습자: " + message + "\n간호사: "
 
-	cfg := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
-	}
-	model := config.Global.Gemini.Model
-	for chunk, err := range c.client.Models.GenerateContentStream(ctx, model, genai.Text(prompt), cfg) {
-		if err != nil {
-			return err
-		}
-		if chunk.Candidates != nil {
-			for _, cand := range chunk.Candidates {
-				if cand.Content != nil {
-					for _, part := range cand.Content.Parts {
-						if part.Text != "" {
-							cb(part.Text)
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
+	return c.stream(ctx, systemPrompt, prompt, cb)
 }
 
 func (c *Client) GenerateDailyTopics(ctx context.Context, language, skillLevel string, pastTopics []string) ([]TopicSuggestion, error) {
@@ -690,13 +820,12 @@ JSON 배열만 출력하세요. 마크다운 코드블록 없이:
 slug는 영문 파스칼케이스 또는 단어 하나로, 디렉토리명에 사용됩니다.
 difficulty는 반드시 "하", "중", "상" 중 하나여야 합니다.`, language, skillLevelKr, pastStr)
 
-	model := config.Global.Gemini.Model
-	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)
+	text, err := c.generate(ctx, prompt)
 	if err != nil {
 		return nil, err
 	}
 
-	raw := extractJSON(resp.Text())
+	raw := extractJSON(text)
 	var topics []TopicSuggestion
 	if err := json.Unmarshal([]byte(raw), &topics); err != nil {
 		return nil, fmt.Errorf("topics JSON parse error: %w\nraw: %s", err, raw)
@@ -731,27 +860,7 @@ func (c *Client) ExplainWrongAnswer(ctx context.Context, question, wrongChoice, 
 
 2~4문장으로 한국어로 답하세요. 마크다운 없이 평문으로.`, markerDesc, question, wrongChoice, correctCode, tone)
 
-	model := config.Global.Gemini.Model
-	cfg := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText("당신은 친절한 코딩 튜터입니다.", genai.RoleUser),
-	}
-	for chunk, err := range c.client.Models.GenerateContentStream(ctx, model, genai.Text(prompt), cfg) {
-		if err != nil {
-			return err
-		}
-		if chunk.Candidates != nil {
-			for _, cand := range chunk.Candidates {
-				if cand.Content != nil {
-					for _, part := range cand.Content.Parts {
-						if part.Text != "" {
-							cb(part.Text)
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
+	return c.stream(ctx, "당신은 친절한 코딩 튜터입니다.", prompt, cb)
 }
 
 func (c *Client) GenerateNextStep(ctx context.Context, tutorContent, nextStep string, currentFiles map[string]string) (string, error) {
@@ -789,12 +898,11 @@ func (c *Client) GenerateNextStep(ctx context.Context, tutorContent, nextStep st
 마크다운 코드블록 없이 TUTORSYS.md 전체 내용만 출력하세요.`,
 		nextStep, tutorContent, currentFilesSection, nextStep, nextStep, nextStep, nextStep)
 
-	model := config.Global.Gemini.Model
-	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)
+	text, err := c.generate(ctx, prompt)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(resp.Text()), nil
+	return strings.TrimSpace(text), nil
 }
 
 func isTestFilename(filename string) bool {
