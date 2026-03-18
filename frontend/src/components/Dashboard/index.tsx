@@ -71,7 +71,6 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const [vnScenario, setVnScenario] = useState<'greeting' | 'same_day_failed' | 'yesterday_failed' | 'streak_failed'>('greeting')
   const [testScenarioIndex, setTestScenarioIndex] = useState(0)
   const [testModeActive, setTestModeActive] = useState(false)
-  const [hoveringMissionId, setHoveringMissionId] = useState<string | null>(null)
   const [creatingProgress, setCreatingProgress] = useState<{stage: string; message: string} | null>(null)
 
   // Nurse chat state
@@ -545,8 +544,6 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
                     key={m.id}
                     className="sidebar-mission-item"
                     onClick={() => handleLoadMission(m)}
-                    onMouseEnter={() => setHoveringMissionId(m.id)}
-                    onMouseLeave={() => setHoveringMissionId(null)}
                   >
                     <div className="sidebar-mission-topic">{m.topic}</div>
                     <div className="sidebar-mission-meta">
@@ -555,20 +552,18 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
                     <span className={`project-status ${m.status === 'completed' ? 'completed' : ''}`}>
                       {m.status === 'completed' ? '완료' : '진행 중'}
                     </span>
-                    {hoveringMissionId === m.id && (
-                      <button
-                        className="mission-delete-btn"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (window.confirm(`"${m.topic}" 미션을 삭제할까요?`)) {
-                            handleDeleteMission(m)
-                          }
-                        }}
-                        title="미션 삭제"
-                      >
-                        🗑
-                      </button>
-                    )}
+                    <button
+                      className="mission-delete-btn"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (window.confirm(`"${m.topic}" 미션을 삭제할까요?`)) {
+                          handleDeleteMission(m)
+                        }
+                      }}
+                      title="미션 삭제"
+                    >
+                      🗑
+                    </button>
                   </div>
                 ))}
               </div>
