@@ -239,7 +239,7 @@ export default function App() {
 
       // Connect LSP for the project language (best-effort, fallback to regex if unavailable)
       const lang = (userSettings?.language || 'go').toLowerCase()
-      lspClient.connect(lang, projectDir, session.access_token)
+      lspClient.connect(lang, data.dir || projectDir, session.access_token)
         .catch((err) => console.warn('LSP unavailable, using fallback:', err))
     }
   }

@@ -74,6 +74,11 @@ func main() {
 		r.StaticFS("/assets", http.Dir("./frontend/dist/assets"))
 		r.StaticFile("/", "./frontend/dist/index.html")
 		r.NoRoute(func(c *gin.Context) {
+			path := "./frontend/dist" + c.Request.URL.Path
+			if _, err := os.Stat(path); err == nil {
+				c.File(path)
+				return
+			}
 			c.File("./frontend/dist/index.html")
 		})
 	}

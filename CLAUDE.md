@@ -14,7 +14,7 @@ tutor.abcfe.net  (홈서버, cmd/homeserver)
 ├── /api/ai/proxy  ← 로컬 watcher가 Gemini를 여기를 통해 호출
 └── Gemini API key + Supabase credentials 전부 여기만
 
-localhost:47291  (로컬 바이너리, cmd/server — 유저가 실행)
+localhost:47291  (로컬 바이너리, cmd/clinic — 유저가 실행)
 ├── /api/fs/*               — 파일 R/W
 ├── /api/run, /api/test     — 코드 실행
 ├── /api/project/setup|apply-step|read-all|status|load|...  — 로컬 프로젝트 상태
@@ -42,7 +42,7 @@ make dev-fe                  # Vite 프론트엔드 :5173
 
 # 또는 직접 실행
 go run ./cmd/homeserver/main.go
-go run ./cmd/server/main.go ~/learning
+go run ./cmd/clinic/main.go ~/learning
 
 브라우저: http://localhost:5173 (개발) 또는 https://tutor.abcfe.net (프로덕션)
 ```
@@ -138,9 +138,9 @@ port = "47291"
 
 `base_dir`은 config에 없고 **CLI 인자 → `BASE_DIR` 환경변수 → 현재 디렉토리(`.`)** 순서:
 ```bash
-go run ./cmd/server ~/learning
-BASE_DIR=~/learning go run ./cmd/server
-go run ./cmd/server   # 현재 디렉토리
+go run ./cmd/clinic ~/learning
+BASE_DIR=~/learning go run ./cmd/clinic
+go run ./cmd/clinic   # 현재 디렉토리
 ```
 
 ### 홈서버 (homeserver.toml)

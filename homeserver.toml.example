@@ -3,7 +3,7 @@ api_key = "AIzaSy..."
 model   = "gemini-2.0-flash"
 
 [server]
-port = "8080"
+port = "18291"
 
 [supabase]
 url              = "https://your-project.supabase.co"
