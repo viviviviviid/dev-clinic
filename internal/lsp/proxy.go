@@ -12,9 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coding-tutor/internal/middleware"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/websocket"
 )
 
@@ -33,18 +31,6 @@ var upgrader = websocket.Upgrader{
 
 // ServeWS handles GET /ws/lsp?lang=go&root=/abs/path&token=<jwt>
 func ServeWS(c *gin.Context) {
-	// Validate token from query param (WS can't set custom headers)
-	tokenStr := c.Query("token")
-	if tokenStr == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
-		return
-	}
-	token, err := jwt.Parse(tokenStr, middleware.JWTKeyFunc)
-	if err != nil || !token.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-		return
-	}
-
 	lang := c.Query("lang")
 	rootPath := c.Query("root")
 	if lang == "" || rootPath == "" {
