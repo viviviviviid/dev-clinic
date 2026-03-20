@@ -110,6 +110,8 @@ coding-tutor/
 │   │   ├── Auth/                # Google 로그인
 │   │   ├── Settings/            # 언어/수준 설정 (base_dir 표시 없음 — 로컬 서버 CLI 인자 전용)
 │   │   ├── Dashboard/           # 간호사 채팅 → [TOPICS] 파싱 → 주제 선택 → confirm-stream SSE
+│   │   │                        # VN 인트로 오버레이 + 간호사 채팅 오버레이. 채팅 패널: top 고정(2.5rem), 폭 62%
+│   │   │                        # .nurse-name-tag: position static (vn-name-tag의 absolute와 분리)
 │   │   ├── FileTree/            # 파일 탐색기. 우클릭: 이름 변경/삭제 → LOCAL fs API
 │   │   ├── QuickOpen/           # Cmd+P 파일명 fuzzy 검색 → LOCAL fs/search/files
 │   │   ├── SearchPanel/         # Cmd+Shift+F 전체 텍스트 grep → LOCAL fs/search/content

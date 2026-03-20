@@ -646,7 +646,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
 
             <div className="nurse-chat-panel">
               <div className="nurse-chat-header">
-                <span className="vn-name-tag" style={{ position: 'static', marginBottom: 0 }}>담당 간호사</span>
+                <span className="nurse-name-tag">담당 간호사</span>
                 <button className="nurse-chat-skip" onClick={closeNurseChat}>닫기 ✕</button>
               </div>
 
