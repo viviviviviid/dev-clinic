@@ -187,20 +187,30 @@ func ReadAllFiles(c *gin.Context) {
 	dir := project.Global.GetDir()
 	files := map[string]string{}
 
-	entries, err := os.ReadDir(dir)
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if strings.Contains(path, "/.snapshots") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		base := filepath.Base(path)
+		if base == "quiz.json" || base == "go.sum" || base == "go.mod" {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		data, rerr := os.ReadFile(path)
+		if rerr == nil {
+			files[rel] = string(data)
+		}
+		return nil
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-	for _, e := range entries {
-		if e.IsDir() || e.Name() == "quiz.json" {
-			continue
-		}
-		name := e.Name()
-		data, rerr := os.ReadFile(filepath.Join(dir, name))
-		if rerr == nil {
-			files[name] = string(data)
-		}
 	}
 
 	curriculum := project.Global.GetContent()

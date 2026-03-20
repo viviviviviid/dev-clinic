@@ -50,9 +50,9 @@ func main() {
 	// CORS: allow the home server origin + localhost for development
 	r.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
-		if origin == "https://clinic.abcfe.net" ||
-			strings.HasPrefix(origin, "http://localhost") ||
-			strings.HasPrefix(origin, "http://127.0.0.1") {
+		if origin == "https://tutor.abcfe.net" ||
+			strings.HasPrefix(origin, "http://localhost:") ||
+			strings.HasPrefix(origin, "http://127.0.0.1:") {
 			c.Header("Access-Control-Allow-Origin", origin)
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

@@ -95,7 +95,7 @@ func jwtKeyFunc(token *jwt.Token) (interface{}, error) {
 			return nil, fmt.Errorf("jwks fetch error: %w", err)
 		}
 		for _, k := range keys {
-			if kid == "" || k.Kid == kid {
+			if k.Kid == kid {
 				xBytes, err := base64.RawURLEncoding.DecodeString(k.X)
 				if err != nil {
 					continue

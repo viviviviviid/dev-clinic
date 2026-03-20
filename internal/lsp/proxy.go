@@ -26,7 +26,12 @@ var serverCmds = map[string][]string{
 }
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		return origin == "https://tutor.abcfe.net" ||
+			strings.HasPrefix(origin, "http://localhost:") ||
+			strings.HasPrefix(origin, "http://127.0.0.1:")
+	},
 }
 
 // ServeWS handles GET /ws/lsp?lang=go&root=/abs/path&token=<jwt>

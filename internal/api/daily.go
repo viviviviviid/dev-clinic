@@ -3,12 +3,12 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
-
 	"strings"
+	"time"
 
 	"github.com/coding-tutor/internal/ai"
 	"github.com/coding-tutor/internal/config"
@@ -63,7 +63,9 @@ func GetDaily(c *gin.Context) {
 
 	// Fetch all history to avoid repeating past topics
 	var allHistory []DailyMission
-	supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&select=topic", userID), &allHistory)
+	if err := supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&select=topic", userID), &allHistory); err != nil {
+		log.Printf("daily: history fetch error: %v", err)
+	}
 	pastTopics := make([]string, 0, len(allHistory))
 	seen := map[string]bool{}
 	for _, m := range allHistory {
@@ -356,7 +358,9 @@ func NurseChatHandler(c *gin.Context) {
 	// If caller didn't supply past topics, fetch from DB
 	if len(req.PastTopics) == 0 {
 		var allHistory []DailyMission
-		supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&select=topic", userID), &allHistory)
+		if err := supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&select=topic", userID), &allHistory); err != nil {
+			log.Printf("daily: nurse-chat history fetch error: %v", err)
+		}
 		seen := map[string]bool{}
 		for _, m := range allHistory {
 			if !seen[m.Topic] {

@@ -50,7 +50,10 @@ func ExplainWrongAnswer(c *gin.Context) {
 		flusher.Flush()
 	}
 
-	skillLevel := project.Global.GetSkillLevel()
+	skillLevel := "normal"
+	if project.Global.IsLoaded() {
+		skillLevel = project.Global.GetSkillLevel()
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
