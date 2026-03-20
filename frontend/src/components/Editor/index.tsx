@@ -113,25 +113,40 @@ function applyDecorations(
   collectionRef.current = editorInstance.createDecorationsCollection(decorations)
 }
 
-function replaceHoleAtIndex(content: string, holeIndex: number, correctCode: string): string {
+function replaceHoleAtIndex(content: string, holeIndex: number, code: string): string {
   const lines = content.split('\n')
   let count = 0
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].includes('[TUTOR:HOLE]')) {
-      if (count === holeIndex) { lines[i] = correctCode; break }
+      if (count === holeIndex) {
+        // Remove marker line + all following comment-only lines (hint block)
+        let end = i
+        while (end + 1 < lines.length && lines[end + 1].trimStart().startsWith('//')) end++
+        const indent = lines[i].match(/^(\s*)/)?.[1] ?? ''
+        const indented = code.split('\n').map(l => indent + l.trimStart()).join('\n')
+        lines.splice(i, end - i + 1, indented)
+        break
+      }
       count++
     }
   }
   return lines.join('\n')
 }
 
-function replaceBugAtIndex(content: string, bugIndex: number, correctCode: string): string {
+function replaceBugAtIndex(content: string, bugIndex: number, code: string): string {
   const lines = content.split('\n')
   let count = 0
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].includes('[TUTOR:BUG]')) {
       if (count === bugIndex) {
-        lines.splice(i, i + 1 < lines.length ? 2 : 1, correctCode)
+        // Remove marker line + all following comment-only lines, then remove the buggy code line
+        let end = i
+        while (end + 1 < lines.length && lines[end + 1].trimStart().startsWith('//')) end++
+        // end+1 is the actual buggy code line — remove it too
+        const totalToRemove = (end - i + 1) + (end + 1 < lines.length ? 1 : 0)
+        const indent = lines[i].match(/^(\s*)/)?.[1] ?? ''
+        const indented = code.split('\n').map(l => indent + l.trimStart()).join('\n')
+        lines.splice(i, totalToRemove, indented)
         break
       }
       count++

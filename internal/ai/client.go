@@ -71,20 +71,13 @@ func Init() {
 
 type StreamCallback func(chunk string)
 
-type QuizOption struct {
-	Label     string `json:"label"`
-	IsCorrect bool   `json:"isCorrect"`
-}
-
 type QuizItem struct {
-	Key         string       `json:"key"`
-	Filename    string       `json:"filename"`
-	MarkerType  string       `json:"markerType"`  // "hole" or "bug"
-	MarkerIndex int          `json:"markerIndex"` // index within its type
-	Question    string       `json:"question"`
-	Options     []QuizOption `json:"options"`
-	CorrectCode string       `json:"correctCode"`
-	Hints       []string     `json:"hints"` // 3단계 힌트: 개념 → 구조 → 거의 다
+	Key         string   `json:"key"`
+	Filename    string   `json:"filename"`
+	MarkerType  string   `json:"markerType"`  // "hole" or "bug"
+	MarkerIndex int      `json:"markerIndex"` // index within its type
+	Question    string   `json:"question"`
+	Hints       []string `json:"hints"` // 3단계 힌트: 개념 → 구조 → 거의 다
 }
 
 // stream dispatches to proxy or direct Gemini
@@ -513,27 +506,27 @@ TUTORSYS.md의 "## 학습 수준" 값을 반드시 확인하고, 그에 맞게 H
     // 📌 목표: <학습자가 달성해야 할 결과를 2~3문장으로. 왜 필요한지 포함>
     //
     // 💡 단계별 접근법:
-    //   1. <첫 번째로 무엇을 준비/선언해야 하는지>
-    //   2. <핵심 로직 — 어떤 조건/반복이 필요한지>
-    //   3. <결과를 어떻게 반환/저장해야 하는지>
+    //   1. <첫 번째로 무엇을 해야 하는지 — 개념과 목적만, 코드 없이>
+    //   2. <핵심 로직 — 어떤 조건/반복 구조가 필요한지 개념으로>
+    //   3. <마무리 — 결과를 어떻게 반환/출력해야 하는지>
     //
-    // 🔧 사용할 것들: <관련 표준 라이브러리 함수, 타입, 키워드를 구체적으로 언급>
-    //    예시 패턴: <완전한 답은 아니지만 구조를 추론할 수 있는 코드 조각>
+    // 🔧 사용할 것: <관련 표준 라이브러리 함수명, 언어 키워드 목록>
     <return 적절한_제로값 또는 빈 상태>
 
-  예시 (Go, HTTP 핸들러):
-    // [TUTOR:HOLE] 클라이언트 요청에서 이름을 읽어 인사말을 반환
+  ⚠️ 주석에 코드 조각, 패턴 예시, 실제 문법을 포함하지 마세요. 단계별 설명은 자연어로만.
+
+  예시 (Go, 연결 리스트 순회):
+    // [TUTOR:HOLE] 리스트의 모든 노드를 순회하며 값 출력
     //
-    // 📌 목표: URL 쿼리 파라미터 "name"을 읽고 "Hello, <name>!" 형태로 응답합니다.
-    //          파라미터가 없으면 "Hello, World!"를 반환해야 합니다.
+    // 📌 목표: Head 노드부터 시작해서 마지막 노드까지 모든 값을 출력합니다.
+    //          각 노드는 Next 포인터로 다음 노드와 연결되어 있습니다.
     //
     // 💡 단계별 접근법:
-    //   1. r.URL.Query().Get("name") 으로 name 파라미터를 읽으세요
-    //   2. name이 빈 문자열이면 "World"로 대체하세요 (if 문 또는 조건 연산자)
-    //   3. fmt.Fprintf(w, "Hello, %%s!", name) 으로 응답을 작성하세요
+    //   1. 현재 위치를 추적할 포인터 변수를 Head로 초기화하세요
+    //   2. 포인터가 nil이 아닐 때까지 반복하면서 각 노드의 값을 출력하세요
+    //   3. 매 반복마다 포인터를 다음 노드로 이동하세요
     //
-    // 🔧 사용할 것들: r.URL.Query().Get(), fmt.Fprintf(), if 조건문
-    //    패턴: if name == "" { name = "..." }
+    // 🔧 사용할 것: for 루프, fmt.Printf, 포인터 역참조
 
 ★ 학습 수준 = normal 일 때 (중간 힌트):
   구조:
@@ -552,6 +545,7 @@ TUTORSYS.md의 "## 학습 수준" 값을 반드시 확인하고, 그에 맞게 H
 ────────────────────────────────────────
 - 컴파일은 되지만 런타임에 잘못 동작하거나 논리적으로 틀린 코드여야 합니다
 - BUG 마커 주석은 버그가 있는 코드 줄 바로 위에 작성하세요
+- ⚠️ BuggyXxx() 같은 별도 함수 생성 금지. BUG는 반드시 실제로 호출되는 함수 안에 심으세요
 
 ★ newbie 일 때:
     // [TUTOR:BUG] <버그가 있는 함수/블록 이름>
@@ -674,8 +668,8 @@ func (c *Client) GenerateQuizData(ctx context.Context, tutorContent string, code
 		))
 	}
 
-	prompt := fmt.Sprintf(`다음 코딩 튜터 프로젝트의 HOLE(구현 위치)과 BUG(버그 위치)에 대한 3지선다 퀴즈를 생성하세요.
-뉴비/재활 학습자를 위한 것이므로 퀴즈를 충분히 많이, 명확하게 만드세요.
+	prompt := fmt.Sprintf(`다음 코딩 튜터 프로젝트의 HOLE(구현 위치)과 BUG(버그 위치)에 대한 힌트를 생성하세요.
+뉴비/재활 학습자가 직접 코드를 작성할 때 참고하는 단계별 힌트입니다.
 
 ## TUTORSYS.md
 %s
@@ -683,25 +677,19 @@ func (c *Client) GenerateQuizData(ctx context.Context, tutorContent string, code
 ## 마커 목록
 %s
 
-각 마커에 대해 3지선다 퀴즈를 생성하세요:
+각 마커에 대해 question과 3단계 힌트를 생성하세요:
 
-HOLE 퀴즈:
-- question: "이 자리에 들어갈 코드는?" 형식으로 HOLE의 의도를 담은 구체적인 질문
-- options: 3개 선택지 (하나만 isCorrect=true, 나머지는 그럴듯하지만 틀린 코드). 여러 줄 코드는 \n으로 구분하여 그대로 작성 (세미콜론으로 이어붙이지 말 것)
-- correctCode: HOLE 줄 전체를 대체할 올바른 코드. 여러 줄이면 \n으로 구분 (인덴테이션 포함, 주석 없이 순수 코드만)
-- hints: 3단계 힌트 배열 (순서대로 점점 더 구체적으로)
-  - hints[0]: 개념 힌트 — 어떤 개념/함수를 써야 하는지 (코드 없이 설명만)
-  - hints[1]: 구조 힌트 — 코드 패턴을 보여주되 핵심 부분은 ?로 가림 (예: "w.(?.?).???()")
-  - hints[2]: 거의 다 — 정답 직전까지 알려주기 (예: "w.(http.Flusher).???()  ← 메서드명만 채우면 됩니다")
+HOLE 힌트:
+- question: 이 HOLE에서 구현해야 할 것이 무엇인지 설명하는 질문 (1~2문장)
+- hints[0]: 개념 힌트 — 어떤 개념/접근 방식이 필요한지 (코드 없이 설명만)
+- hints[1]: 구조 힌트 — 어떤 흐름 제어나 데이터 구조가 필요한지 (코드 조각 없이)
+- hints[2]: 구체 힌트 — 사용할 함수명/키워드를 알려주되 완성된 코드는 주지 않기
 
-BUG 퀴즈:
-- question: "이 코드의 버그를 고친 올바른 코드는?" 형식으로 버그의 증상을 설명하는 질문
-- options: 3개 선택지 (하나만 isCorrect=true — 버그가 수정된 코드, 나머지는 비슷하지만 틀린 버전). 여러 줄 코드는 \n으로 구분하여 그대로 작성 (세미콜론으로 이어붙이지 말 것)
-- correctCode: 버그가 있는 줄(BUG 마커 다음 줄)을 대체할 올바른 코드. 여러 줄이면 \n으로 구분 (인덴테이션 포함)
-- hints: 3단계 힌트 배열
-  - hints[0]: 어떤 종류의 버그인지 (논리 오류? 순서 오류? 잘못된 연산?)
-  - hints[1]: 버그가 있는 줄 범위를 좁혀서 알려주기
-  - hints[2]: 올바른 코드에서 달라지는 부분만 강조 (예: "Flush()가 루프 안에 있어야 합니다")
+BUG 힌트:
+- question: 버그의 증상을 설명하는 질문 (실행 시 어떤 문제가 발생하는지)
+- hints[0]: 어떤 종류의 버그인지 (논리 오류? 순서 오류? 잘못된 참조?)
+- hints[1]: 문제가 있는 부분을 범위로 좁혀서 알려주기 (코드 없이)
+- hints[2]: 무엇을 어떻게 바꿔야 하는지 구체적으로 (코드 없이 자연어로)
 
 JSON만 출력하세요. 마크다운 코드블록 없이:
 {
@@ -711,13 +699,7 @@ JSON만 출력하세요. 마크다운 코드블록 없이:
     "markerType": "hole",
     "markerIndex": 0,
     "question": "...",
-    "hints": ["개념 힌트", "구조 힌트", "거의 다 힌트"],
-    "options": [
-      {"label": "올바른 코드", "isCorrect": true},
-      {"label": "틀린 코드1", "isCorrect": false},
-      {"label": "틀린 코드2", "isCorrect": false}
-    ],
-    "correctCode": "실제 정답 코드 한 줄"
+    "hints": ["개념 힌트", "구조 힌트", "구체 힌트"]
   },
   "filename:bug:0": {
     "key": "filename:bug:0",
@@ -725,9 +707,7 @@ JSON만 출력하세요. 마크다운 코드블록 없이:
     "markerType": "bug",
     "markerIndex": 0,
     "question": "...",
-    "hints": ["버그 종류 힌트", "범위 힌트", "핵심 힌트"],
-    "options": [...],
-    "correctCode": "버그 수정된 코드 한 줄"
+    "hints": ["버그 종류 힌트", "범위 힌트", "방향 힌트"]
   }
 }`, tutorContent, markerList.String())
 
@@ -925,7 +905,7 @@ func isTestFilename(filename string) bool {
 func skillLevelToKorean(level string) string {
 	switch level {
 	case "newbie":
-		return "뉴비/재활 (자세한 설명 + 퀴즈)"
+		return "뉴비/재활 (자세한 설명 + 단계별 힌트)"
 	case "experienced":
 		return "숙련자 (간결한 피드백)"
 	default:

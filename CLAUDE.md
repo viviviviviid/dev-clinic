@@ -59,6 +59,9 @@ coding-tutor/
 │   ├── config/config.go         # 로컬 서버용 config (Port + BaseDir만). Supabase/Gemini 섹션 없음
 │   ├── ai/client.go             # Gemini API. InitProxy(url): 런타임에 proxy URL 받아 초기화 (로컬 서버용)
 │   │                            # GenerateCodeFiles: existingFiles 있을 때 함수 시그니처/패키지명 유지 규칙 강제 (5가지 하드 룰)
+│   │                            #   newbie HOLE 주석: 자연어 설명만, 코드 조각/패턴 포함 금지
+│   │                            #   BUG: 실제 호출 함수 안에 인라인. BuggyXxx() 별도 함수 생성 금지
+│   │                            # GenerateQuizData: HOLE/BUG별 question + hints 3단계만 (options/correctCode 없음)
 │   │                            # NurseChat: 간호사 페르소나 → [TOPICS] 블록으로 주제 3개 제안
 │   │                            # GenerateNextStep: "누적 확장" 방식 — 단계 수 자유 결정, 3단계 작업 프로세스
 │   ├── localapi/project.go      # 로컬 서버 전용 project 핸들러
@@ -116,7 +119,7 @@ coding-tutor/
 │   │   └── Editor/
 │   │       ├── index.tsx        # Monaco + 다중 탭 + HOLE/BUG decoration + LSP providers
 │   │       │                    # git diff gutter: LOCAL /api/fs/git-diff
-│   │       ├── QuizOverlay.tsx  # 뉴비 퀴즈 오버레이 → LOCAL /api/explain SSE
+│   │       ├── QuizOverlay.tsx  # 뉴비 힌트 오버레이 — glyph 버튼 → view zone 카드. 직접 타이핑 후 확인 → 에디터 삽입
 │   │       └── ConceptPanel.tsx # 개념 설명 슬라이드 패널
 │   │   └── FeedbackPanel/       # AI 피드백 스트리밍. stepComplete && testResult?.passed → "다음 단계로" 활성
 │   └── store/index.ts           # Zustand 전역 상태
@@ -305,20 +308,24 @@ AI 응답에 `[STEP_COMPLETE]` 포함 → stepComplete=true. `testResult?.passed
 
 | 값 | 동작 |
 |----|------|
-| `newbie` | HOLE 블러 + 3지선다 퀴즈 + 힌트 3단계 + 오답 AI 설명. HOLE 순차 잠금. |
+| `newbie` | HOLE 블러 + 힌트 패널 (3단계 점진 공개) + 직접 타이핑. HOLE 순차 잠금. |
 | `normal` | HOLE/BUG 하이라이트. 힌트+가이드 피드백. |
 | `experienced` | 하이라이트. 간결 피드백(오류 위치만). |
 
 ### 뉴비 전용 기능
 
-- **quiz.json**: confirm-stream/apply-step 시 각 HOLE/BUG에 3지선다+힌트 3개 생성. 키: `filename:hole:0`
-- **QuizOverlay**: glyph 마진 아이콘 → view zone 카드. 오답 → shake + LOCAL `/api/explain` SSE
+- **quiz.json**: confirm-stream/apply-step 시 각 HOLE/BUG에 `question` + `hints` 3단계 생성. 키: `filename:hole:0`
+  - `options`, `correctCode` 없음 — 3지선다 방식 폐기
+- **QuizOverlay (HintCard)**: glyph 마진 아이콘 → view zone 카드. 사용자가 직접 코드 타이핑 후 "확인" → 에디터에 삽입
+  - 힌트는 하단에 숨겨두고 버튼으로 단계별 공개 (1→2→3)
+  - `replaceHoleAtIndex`: HOLE 마커 + 힌트 주석 블록 전체를 사용자 코드로 교체
+  - `replaceBugAtIndex`: BUG 마커 + 힌트 주석 + 버그 코드 라인 전체를 사용자 코드로 교체
+- **BUG 구조**: 실제 호출되는 함수 안에 인라인으로 심음. 별도 BuggyXxx() 함수 없음
 - **HOLE 순차 잠금**: 첫 번째 미해결 HOLE만 활성, 나머지 🔒
 
 ### 직접 fetch 시 인증 (로컬 서버 호출)
 
-Editor의 `/api/run`, QuizOverlay의 `/api/explain`은 LOCAL을 향하며 auth 헤더 불필요.
-단, explain은 홈서버에 마운트될 경우 `supabase.auth.getSession()`으로 토큰 직접 설정.
+Editor의 `/api/run`은 LOCAL을 향하며 auth 헤더 불필요.
 
 ## 스냅샷 시스템
 
@@ -353,7 +360,7 @@ rustup component add rust-analyzer                    # Rust
 
 - **project_dir 저장 형식**: Supabase daily_missions.project_dir = dir_suffix만 (`250317-HelloGo`). 로컬 full path 모름
 - **ai.InitProxy 타이밍**: setup/load 요청 시 ai_proxy_url 수신 후 초기화. watcher 시작 전에 반드시 호출됨
-- **CORS 보안**: 로컬 서버는 `tutor.abcfe.net` + `localhost` origin만 허용. JWT 검증 없음
+- **CORS 보안**: 로컬 서버는 `tutor.abcfe.net` + `localhost:` (콜론 포함) origin만 허용. JWT 검증 없음
 - **daily_missions UNIQUE**: `UNIQUE(user_id, date)` 제약 없어야 하루 여러 미션 허용
 - **Go go.mod**: apply-step/setup 시 `ensureGoMod()` 자동 실행 (비치명적)
 - **[STEP_COMPLETE] 하드 게이팅**: watcher가 AI 응답 전체 수집 후 allTestsPassed()=false면 토큰 제거

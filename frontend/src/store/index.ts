@@ -41,20 +41,13 @@ export interface ChatMessage {
   content: string
 }
 
-export interface QuizOption {
-  label: string
-  isCorrect: boolean
-}
-
 export interface QuizItem {
   key: string
   filename: string
   markerType: string   // "hole" | "bug"
   markerIndex: number
   question: string
-  hints: string[]      // 3단계: 개념 → 구조 → 거의 다
-  options: QuizOption[]
-  correctCode: string
+  hints: string[]      // 3단계: 개념 → 구조 → 구체 힌트
 }
 
 export type QuizData = Record<string, QuizItem>
