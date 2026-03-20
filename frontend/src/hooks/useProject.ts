@@ -275,7 +275,7 @@ export function useProject() {
       return { done: true, message: nextData.message }
     }
 
-    // Step 3: LOCAL — write new files, restart watcher
+    // Step 3: LOCAL — write new files (+ quiz.json if newbie), restart watcher
     const applyRes = await fetchLocal('/api/project/apply-step', {
       method: 'POST',
       body: JSON.stringify({
@@ -283,18 +283,11 @@ export function useProject() {
         new_files: nextData.new_files,
         ai_proxy_url: AI_PROXY_URL,
         token,
+        quiz_data: nextData.quiz_data ?? null,
       }),
     })
     if (!applyRes.ok) return { error: 'apply-step failed' }
     const applyData = await applyRes.json()
-
-    // If quiz data was returned, save it to LOCAL
-    if (nextData.quiz_data) {
-      await fetchLocal('/api/project/save-quiz', {
-        method: 'POST',
-        body: JSON.stringify({ quiz_data: nextData.quiz_data }),
-      })
-    }
 
     return applyData
   }

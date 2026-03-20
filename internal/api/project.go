@@ -130,7 +130,7 @@ func ConfirmProject(c *gin.Context) {
 	})
 }
 
-func findNextStep(content, currentStep string) (string, string) {
+func findNextStep(content, currentStep string) (string, string, error) {
 	lines := strings.Split(content, "\n")
 	inCurriculum := false
 	type stepInfo struct{ label, full string }
@@ -156,16 +156,23 @@ func findNextStep(content, currentStep string) (string, string) {
 			}
 		}
 	}
+	if len(steps) == 0 {
+		return "", "", fmt.Errorf("TUTORSYS.md에 커리큘럼 단계가 없습니다")
+	}
 	currentLabel := currentStep
 	if idx := strings.Index(currentStep, ":"); idx > 0 {
 		currentLabel = strings.TrimSpace(currentStep[:idx])
 	}
 	for i, s := range steps {
-		if s.label == currentLabel && i+1 < len(steps) {
-			return steps[i+1].label, steps[i+1].full
+		if s.label == currentLabel {
+			if i+1 < len(steps) {
+				return steps[i+1].label, steps[i+1].full, nil
+			}
+			// 마지막 단계 — 완료
+			return "", "", nil
 		}
 	}
-	return "", ""
+	return "", "", fmt.Errorf("현재 단계 %q를 커리큘럼에서 찾을 수 없습니다", currentStep)
 }
 
 // extractCurrentStepFromContent parses the "현재 단계" section from TUTORSYS.md content.
@@ -211,7 +218,11 @@ func AdvanceToNextStep(c *gin.Context) {
 	}
 
 	currentStep := extractCurrentStepFromContent(req.Curriculum)
-	nextLabel, nextFull := findNextStep(req.Curriculum, currentStep)
+	nextLabel, nextFull, err := findNextStep(req.Curriculum, currentStep)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if nextLabel == "" {
 		c.JSON(http.StatusOK, gin.H{"done": true, "message": "모든 단계를 완료했습니다"})
 		return

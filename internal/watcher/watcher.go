@@ -135,9 +135,21 @@ func allTestsPassed(language, testOutput string) bool {
 	}
 	switch strings.ToLower(language) {
 	case "go":
-		return strings.Contains(testOutput, "ok") && !strings.Contains(testOutput, "FAIL")
+		// "ok  module/pkg 0.001s" 형태의 라인이 있어야 함 (단순 "ok" 포함 판단 금지)
+		hasPkg := false
+		for _, l := range strings.Split(testOutput, "\n") {
+			trimmed := strings.TrimSpace(l)
+			if strings.HasPrefix(trimmed, "ok ") || strings.HasPrefix(trimmed, "ok\t") {
+				hasPkg = true
+			}
+			if strings.HasPrefix(trimmed, "FAIL") {
+				return false
+			}
+		}
+		return hasPkg
 	case "python":
-		return strings.Contains(testOutput, "passed") && !strings.Contains(testOutput, "failed")
+		// pytest -q 출력: "1 passed in 0.01s", "2 passed, 1 warning in ..."
+		return strings.Contains(testOutput, " passed") && !strings.Contains(testOutput, " failed")
 	case "rust":
 		return strings.Contains(testOutput, "test result: ok")
 	case "typescript", "javascript":
@@ -219,7 +231,7 @@ func (w *Watcher) snapshot(dir string) error {
 }
 
 func (w *Watcher) run(ctx context.Context, dir string) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -255,7 +267,7 @@ func (w *Watcher) run(ctx context.Context, dir string) {
 			if lastChange.IsZero() {
 				continue
 			}
-			if time.Since(lastChange) < 5*time.Second {
+			if time.Since(lastChange) < 2*time.Second {
 				continue
 			}
 			w.triggerSync(dir)

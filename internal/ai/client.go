@@ -530,7 +530,7 @@ TUTORSYS.md의 "## 학습 수준" 값을 반드시 확인하고, 그에 맞게 H
     // 💡 단계별 접근법:
     //   1. r.URL.Query().Get("name") 으로 name 파라미터를 읽으세요
     //   2. name이 빈 문자열이면 "World"로 대체하세요 (if 문 또는 조건 연산자)
-    //   3. fmt.Fprintf(w, "Hello, %s!", name) 으로 응답을 작성하세요
+    //   3. fmt.Fprintf(w, "Hello, %%s!", name) 으로 응답을 작성하세요
     //
     // 🔧 사용할 것들: r.URL.Query().Get(), fmt.Fprintf(), if 조건문
     //    패턴: if name == "" { name = "..." }
@@ -960,11 +960,11 @@ func parseCodeFiles(raw string) map[string]string {
 			if inFile && currentFile != "" {
 				files[currentFile] = joinLines(currentContent)
 			}
-			currentFile = line[8 : len(line)-3]
-			if len(line) > 3 && line[len(line)-3:] == "===" {
-				currentFile = line[8 : len(line)-3]
+			// 파일명 추출: 끝의 "===" 제거 후 공백 trim (AI가 ===FILE:foo.go === 같이 생성해도 안전)
+			if len(line) > 11 && line[len(line)-3:] == "===" {
+				currentFile = strings.TrimSpace(line[8 : len(line)-3])
 			} else {
-				currentFile = line[8:]
+				currentFile = strings.TrimSpace(line[8:])
 			}
 			currentContent = nil
 			inFile = true
@@ -994,12 +994,20 @@ func splitLines(s string) []string {
 	start := 0
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
+			end := i
+			if end > start && s[end-1] == '\r' {
+				end-- // CRLF 처리: CR 제거
+			}
+			lines = append(lines, s[start:end])
 			start = i + 1
 		}
 	}
 	if start < len(s) {
-		lines = append(lines, s[start:])
+		line := s[start:]
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }

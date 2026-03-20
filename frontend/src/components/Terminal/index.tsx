@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useStore } from '../../store'
+import { WS_BASE } from '../../lib/api'
 import './Terminal.css'
 
 interface Props {
@@ -60,7 +61,7 @@ export default function TerminalPanel({ onClose }: Props) {
 
     // WebSocket 연결
     const dir = projectStatus?.dir ?? ''
-    const wsUrl = `ws://${window.location.hostname}:${window.location.port}/ws/terminal?dir=${encodeURIComponent(dir)}`
+    const wsUrl = `${WS_BASE}/ws/terminal?dir=${encodeURIComponent(dir)}`
     const ws = new WebSocket(wsUrl)
     ws.binaryType = 'arraybuffer'
     wsRef.current = ws

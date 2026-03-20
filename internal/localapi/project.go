@@ -105,6 +105,7 @@ type ApplyStepReq struct {
 	NewFiles      map[string]string `json:"new_files"`
 	AIProxyURL    string            `json:"ai_proxy_url,omitempty"`
 	Token         string            `json:"token,omitempty"`
+	QuizData      json.RawMessage   `json:"quiz_data,omitempty"` // 뉴비 전용: 홈서버가 생성한 quiz 데이터
 }
 
 // ApplyStep saves a snapshot, writes new files, updates project state, and restarts watcher.
@@ -131,7 +132,19 @@ func ApplyStep(c *gin.Context) {
 	for name, content := range req.NewFiles {
 		path := filepath.Join(dir, name)
 		os.MkdirAll(filepath.Dir(path), 0755)
-		os.WriteFile(path, []byte(content), 0644)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("write %s: %v", name, err)})
+			return
+		}
+	}
+
+	// Write quiz.json if provided (뉴비 전용 — apply-step과 원자적으로 처리)
+	if len(req.QuizData) > 0 && string(req.QuizData) != "null" {
+		quizPath := filepath.Join(dir, "quiz.json")
+		if err := os.WriteFile(quizPath, req.QuizData, 0644); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "write quiz.json: " + err.Error()})
+			return
+		}
 	}
 
 	// Re-run go mod if needed (non-fatal)
