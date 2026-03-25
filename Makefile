@@ -15,7 +15,7 @@ build-fe:
 	cd frontend && npm run build
 
 build: build-fe
-	go build -o /usr/local/bin/clinic ./cmd/clinic/main.go
+	go build -o bin/clinic ./cmd/clinic/main.go
 
 build-homeserver: build-fe
 	go build -o bin/coding-tutor-server ./cmd/homeserver/main.go
