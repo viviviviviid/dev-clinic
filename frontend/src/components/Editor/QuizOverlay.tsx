@@ -211,7 +211,7 @@ interface HintCardProps {
 }
 
 function HintCard({
-  quizKey, item, top, hints, hintLevel,
+  quizKey: _quizKey, item, top, hints, hintLevel,
   writeInput, onWriteInputChange, onSubmit,
   onRevealHint, onClose, onHeightChange,
 }: HintCardProps) {
