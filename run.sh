@@ -7,7 +7,10 @@ BIN="./bin/coding-tutor-server"
 
 case "$1" in
   start)
-    pm2 start $BIN --name $NAME
+    echo "Building..."
+    make build-homeserver || exit 1
+    echo "Starting..."
+    pm2 restart $NAME 2>/dev/null || pm2 start $BIN --name $NAME
     pm2 save
     ;;
   stop)
