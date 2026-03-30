@@ -51,6 +51,7 @@ func main() {
 	r.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		if origin == "https://tutor.abcfe.net" ||
+			origin == "https://clinic.abcfe.net" ||
 			strings.HasPrefix(origin, "http://localhost:") ||
 			strings.HasPrefix(origin, "http://127.0.0.1:") {
 			c.Header("Access-Control-Allow-Origin", origin)

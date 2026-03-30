@@ -1114,13 +1114,13 @@ export default function Editor() {
 
   async function handleRun() {
     if (isRunning || isTesting) return
-    streamOutput('/api/run', '실행 결과', setIsRunning)
+    streamOutput(`${LOCAL}/api/run`, '실행 결과', setIsRunning)
   }
 
   useEffect(() => {
     handleTestFuncRef.current = (funcName: string) => {
       if (isRunning || isTesting) return
-      const url = funcName ? `/api/test?func=${encodeURIComponent(funcName)}` : '/api/test'
+      const url = funcName ? `${LOCAL}/api/test?func=${encodeURIComponent(funcName)}` : `${LOCAL}/api/test`
       const title = funcName ? `테스트: ${funcName}` : '테스트 결과'
       streamOutput(url, title, setIsTesting)
     }

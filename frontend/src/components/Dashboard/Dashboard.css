@@ -832,7 +832,7 @@
 }
 
 .vn-fade-in {
-  animation: vn-in 0.5s ease forwards;
+  animation: vn-in 0.2s ease forwards;
 }
 
 .vn-fade-out {
@@ -867,7 +867,7 @@
   max-height: 720px;
   display: flex;
   align-items: flex-end;
-  animation: char-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+  animation: char-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
   pointer-events: none;
   user-select: none;
   filter: drop-shadow(0 12px 40px rgba(0, 0, 0, 0.15));
@@ -892,7 +892,7 @@
   object-position: bottom center;
   position: relative;
   z-index: 1;
-  animation: char-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: char-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .vn-character-placeholder {
@@ -902,7 +902,7 @@
   bottom: 0;
   right: 0;
   filter: drop-shadow(0 8px 32px rgba(0, 0, 0, 0.1));
-  animation: char-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+  animation: char-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .vn-character img:not([style*="display: none"])+.vn-character-placeholder {

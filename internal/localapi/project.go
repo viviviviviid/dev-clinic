@@ -234,6 +234,11 @@ func DeleteProjectFiles(c *gin.Context) {
 		return
 	}
 
+	// Resolve to full path if only a suffix was given
+	if !filepath.IsAbs(req.ProjectDir) {
+		req.ProjectDir = filepath.Join(config.Global.BaseDir, req.ProjectDir)
+	}
+
 	// Security: must be within base_dir
 	if !strings.HasPrefix(req.ProjectDir, config.Global.BaseDir) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
