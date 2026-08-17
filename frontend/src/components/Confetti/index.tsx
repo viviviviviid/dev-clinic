@@ -9,6 +9,8 @@ const COLORS = ['#58a6ff','#3fb950','#f0883e','#f85149','#ffd700','#a371f7','#56
 
 export default function Confetti({ onDone }: { onDone?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const onDoneRef = useRef(onDone)
+  onDoneRef.current = onDone
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -54,7 +56,7 @@ export default function Confetti({ onDone }: { onDone?: () => void }) {
       if (alive && frame < 300) {
         animId = requestAnimationFrame(draw)
       } else {
-        onDone?.()
+        onDoneRef.current?.()
       }
     }
 

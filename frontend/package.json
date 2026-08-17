@@ -3,10 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "node --test src/components/Dashboard/nurseSse.test.mjs src/components/Editor/autosave.test.mjs src/components/Editor/markerRanges.test.mjs src/components/Editor/testRun.test.mjs src/components/FeedbackPanel/chatSse.test.mjs src/hooks/webSocketProject.test.mjs src/lib/bootConfig.test.mjs src/lib/localUrl.test.mjs src/lib/storage.test.mjs src/store/index.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

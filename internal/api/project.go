@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -81,55 +80,6 @@ func CreateProject(c *gin.Context) {
 	})
 }
 
-type ConfirmProjectReq struct {
-	Dir        string `json:"dir"`
-	Curriculum string `json:"curriculum"`
-	SkillLevel string `json:"skillLevel"`
-}
-
-// ConfirmProject generates code files from a curriculum and returns them.
-// The caller (browser) is responsible for writing files via LOCAL /api/project/setup.
-func ConfirmProject(c *gin.Context) {
-	var req ConfirmProjectReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if ai.Global == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI client not initialized"})
-		return
-	}
-
-	files, err := ai.Global.GenerateCodeFiles(c.Request.Context(), req.Curriculum, nil)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	allFiles := make(map[string]string, len(files)+1)
-	allFiles["TUTORSYS.md"] = req.Curriculum
-	for k, v := range files {
-		allFiles[k] = v
-	}
-
-	if req.SkillLevel == "newbie" {
-		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), req.Curriculum, files)
-		if err == nil && len(quizData) > 0 {
-			quizBytes, jsonErr := json.Marshal(quizData)
-			if jsonErr == nil {
-				allFiles["quiz.json"] = string(quizBytes)
-			}
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"ok":    true,
-		"files": allFiles,
-		"dir":   req.Dir,
-	})
-}
-
 func findNextStep(content, currentStep string) (string, string, error) {
 	lines := strings.Split(content, "\n")
 	inCurriculum := false
@@ -177,10 +127,17 @@ func findNextStep(content, currentStep string) (string, string, error) {
 
 // extractCurrentStepFromContent parses the "현재 단계" section from TUTORSYS.md content.
 func extractCurrentStepFromContent(content string) string {
+	if currentStep := extractTutorSectionFromContent(content, "현재 단계"); currentStep != "" {
+		return currentStep
+	}
+	return "Step 1"
+}
+
+func extractTutorSectionFromContent(content, section string) string {
 	lines := strings.Split(content, "\n")
 	inSection := false
 	for _, line := range lines {
-		if strings.HasPrefix(line, "## 현재 단계") {
+		if line == "## "+section {
 			inSection = true
 			continue
 		}
@@ -194,15 +151,15 @@ func extractCurrentStepFromContent(content string) string {
 			}
 		}
 	}
-	return "Step 1"
+	return ""
 }
 
 // NextStepReq is sent by the browser with the current project state.
-// The home server generates the next step and returns new files without touching disk.
+// The clinic generates the next step and returns new files without touching disk.
 type NextStepReq struct {
 	Curriculum   string            `json:"curriculum"`
 	CurrentFiles map[string]string `json:"current_files"`
-	SkillLevel   string            `json:"skill_level"`
+	SkillLevel   string            `json:"skill_level"` // accepted for compatibility; TUTORSYS.md is authoritative
 }
 
 func AdvanceToNextStep(c *gin.Context) {
@@ -240,26 +197,46 @@ func AdvanceToNextStep(c *gin.Context) {
 		return
 	}
 
-	// Include TUTORSYS.md so the local server can write it
-	allFiles := make(map[string]string, len(files)+1)
-	allFiles["TUTORSYS.md"] = newCurriculum
-	for k, v := range files {
-		allFiles[k] = v
-	}
+	// Keep new_curriculum as the only authoritative TUTORSYS.md value even if
+	// a provider ever returns a reserved filename despite validation.
+	allFiles := generatedFilesWithCurriculum(files, newCurriculum)
 
 	resp := gin.H{
 		"new_curriculum": newCurriculum,
 		"new_files":      allFiles,
+		"quiz_data":      nil,
 	}
 
-	if req.SkillLevel == "newbie" {
+	if extractTutorSectionFromContent(newCurriculum, "학습 수준") == "newbie" {
 		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), newCurriculum, files)
-		if err == nil && len(quizData) > 0 {
-			resp["quiz_data"] = quizData
+		quizData, err = requireGeneratedQuiz(quizData, err)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
+		resp["quiz_data"] = quizData
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+func requireGeneratedQuiz(quizData map[string]ai.QuizItem, generationErr error) (map[string]ai.QuizItem, error) {
+	if generationErr != nil {
+		return nil, fmt.Errorf("generate quiz data: %w", generationErr)
+	}
+	if len(quizData) == 0 {
+		return nil, fmt.Errorf("generate quiz data: no quiz items returned for required tutor markers")
+	}
+	return quizData, nil
+}
+
+func generatedFilesWithCurriculum(files map[string]string, curriculum string) map[string]string {
+	allFiles := make(map[string]string, len(files)+1)
+	for name, content := range files {
+		allFiles[name] = content
+	}
+	allFiles["TUTORSYS.md"] = curriculum
+	return allFiles
 }
 
 type CompleteProjectReq struct {
@@ -270,23 +247,26 @@ func CompleteProject(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	var req CompleteProjectReq
-	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectDir == "" {
+	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectDir == "" || len(req.ProjectDir) > 1024 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "project_dir required"})
 		return
 	}
 
-	// Match by exact path first, then by dir_suffix
-	path := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, req.ProjectDir)
-	if err := supabase.Patch(path, map[string]string{"status": "completed"}); err != nil {
-		suffix := req.ProjectDir
-		if idx := strings.LastIndex(req.ProjectDir, "/"); idx >= 0 {
-			suffix = req.ProjectDir[idx+1:]
-		}
-		path2 := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, suffix)
-		if err2 := supabase.Patch(path2, map[string]string{"status": "completed"}); err2 != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
+	// New records store only the directory suffix. Patch it unconditionally:
+	// PostgREST returns success even when an exact filter matches zero rows.
+	suffix := filepath.Base(filepath.Clean(req.ProjectDir))
+	suffixPath := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(suffix))
+	suffixErr := supabase.Patch(suffixPath, map[string]string{"status": "completed"})
+
+	// Also update legacy rows that stored an absolute path.
+	var legacyErr error
+	if req.ProjectDir != suffix {
+		legacyPath := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(req.ProjectDir))
+		legacyErr = supabase.Patch(legacyPath, map[string]string{"status": "completed"})
+	}
+	if suffixErr != nil && (req.ProjectDir == suffix || legacyErr != nil) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": suffixErr.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -299,16 +279,16 @@ type DeleteProjectReq struct {
 func DeleteProject(c *gin.Context) {
 	userID := c.GetString("user_id")
 	var req DeleteProjectReq
-	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectDir == "" {
+	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectDir == "" || len(req.ProjectDir) > 1024 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "project_dir required"})
 		return
 	}
 
 	// Remove from DB — match by exact path or by dir_suffix
-	_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, req.ProjectDir))
+	_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(req.ProjectDir)))
 	if idx := strings.LastIndex(req.ProjectDir, "/"); idx >= 0 {
 		suffix := req.ProjectDir[idx+1:]
-		_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", userID, suffix))
+		_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(suffix)))
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -321,8 +301,7 @@ func GetProjectStatus(c *gin.Context) {
 }
 
 type LoadProjectReq struct {
-	Dir        string `json:"dir"`
-	AIProxyURL string `json:"ai_proxy_url,omitempty"`
+	Dir string `json:"dir"`
 }
 
 func LoadProject(c *gin.Context) {
@@ -337,9 +316,6 @@ func LoadProject(c *gin.Context) {
 		return
 	}
 
-	if ai.Global != nil {
-		ai.Global.SetToken(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
-	}
 	if err := watcher.Start(req.Dir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
 		return

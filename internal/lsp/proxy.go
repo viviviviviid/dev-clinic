@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,9 +12,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
+	"github.com/coding-tutor/internal/config"
+	"github.com/coding-tutor/internal/pathguard"
+	wsserver "github.com/coding-tutor/internal/ws"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+)
+
+const (
+	maxLSPMessageBytes = 4 << 20
+	maxLSPHeaderBytes  = 8 << 10
 )
 
 var serverCmds = map[string][]string{
@@ -25,22 +35,28 @@ var serverCmds = map[string][]string{
 	"rust":       {"rust-analyzer"},
 }
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		return origin == "https://tutor.abcfe.net" ||
-			origin == "https://clinic.abcfe.net" ||
-			strings.HasPrefix(origin, "http://localhost:") ||
-			strings.HasPrefix(origin, "http://127.0.0.1:")
-	},
-}
-
-// ServeWS handles GET /ws/lsp?lang=go&root=/abs/path&token=<jwt>
+// ServeWS handles GET /ws/lsp?lang=go&root=/abs/path. Authentication is
+// supplied through WebSocket subprotocols ["coding-tutor", <Supabase JWT>].
 func ServeWS(c *gin.Context) {
+	if _, err := wsserver.AuthenticateRequest(c.Request); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid websocket authentication"})
+		return
+	}
+
 	lang := c.Query("lang")
-	rootPath := c.Query("root")
-	if lang == "" || rootPath == "" {
+	requestedRoot := c.Query("root")
+	if lang == "" || requestedRoot == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "lang and root are required"})
+		return
+	}
+	rootPath, err := pathguard.Resolve(config.Global.BaseDir, requestedRoot)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invalid language server root"})
+		return
+	}
+	info, err := os.Stat(rootPath)
+	if err != nil || !info.IsDir() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "language server root is not a directory"})
 		return
 	}
 
@@ -58,17 +74,20 @@ func ServeWS(c *gin.Context) {
 	}
 
 	// Upgrade to WebSocket
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, _, err := wsserver.Upgrade(c.Writer, c.Request)
 	if err != nil {
 		log.Printf("lsp: ws upgrade error: %v", err)
 		return
 	}
+	conn.SetReadLimit(maxLSPMessageBytes)
 	defer conn.Close()
 
 	// Start language server process
 	args := append([]string{resolvedBin}, cmdArgs[1:]...)
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = rootPath
+	cmd.Env = wsserver.SanitizedEnv(os.Environ())
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -92,7 +111,8 @@ func ServeWS(c *gin.Context) {
 	}
 	defer func() {
 		if cmd.Process != nil {
-			cmd.Process.Kill()
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Process.Kill()
 		}
 	}()
 
@@ -100,9 +120,11 @@ func ServeWS(c *gin.Context) {
 
 	go func() {
 		scanner := bufio.NewScanner(stderr)
+		scanner.Buffer(make([]byte, 16<<10), 256<<10)
 		for scanner.Scan() {
 			log.Printf("lsp %s: %s", cmdArgs[0], scanner.Text())
 		}
+		_, _ = io.Copy(io.Discard, stderr)
 	}()
 
 	// WS → LS stdin (goroutine)
@@ -134,12 +156,23 @@ func ServeWS(c *gin.Context) {
 		for {
 			// Parse Content-Length header
 			contentLength := -1
+			headerBytes := 0
 			for {
-				line, err := reader.ReadString('\n')
+				lineBytes, err := reader.ReadSlice('\n')
+				if err == bufio.ErrBufferFull {
+					lsToWS <- errors.New("LSP header line is too large")
+					return
+				}
 				if err != nil {
 					lsToWS <- err
 					return
 				}
+				headerBytes += len(lineBytes)
+				if headerBytes > maxLSPHeaderBytes {
+					lsToWS <- errors.New("LSP headers are too large")
+					return
+				}
+				line := string(lineBytes)
 				line = strings.TrimRight(line, "\r\n")
 				if line == "" {
 					break // End of headers
@@ -152,6 +185,10 @@ func ServeWS(c *gin.Context) {
 
 			if contentLength < 0 {
 				continue
+			}
+			if contentLength > maxLSPMessageBytes {
+				lsToWS <- fmt.Errorf("LSP message exceeds %d bytes", maxLSPMessageBytes)
+				return
 			}
 
 			// Read exactly contentLength bytes
@@ -191,10 +228,10 @@ func resolveBin(name string) (string, error) {
 	}
 
 	candidates := []string{
-		filepath.Join(goBin, name),                   // Go tools (gopls, etc.)
-		filepath.Join(home, ".local", "bin", name),    // pip --user installs
+		filepath.Join(goBin, name),                 // Go tools (gopls, etc.)
+		filepath.Join(home, ".local", "bin", name), // pip --user installs
 		"/usr/local/bin/" + name,
-		"/opt/homebrew/bin/" + name,                   // Homebrew on Apple Silicon
+		"/opt/homebrew/bin/" + name, // Homebrew on Apple Silicon
 	}
 
 	for _, p := range candidates {

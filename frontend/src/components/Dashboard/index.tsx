@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useProject } from '../../hooks/useProject'
 import type { TopicSuggestion } from '../../hooks/useProject'
 import { useStore } from '../../store'
+import { getErrorMessage, isAbortError } from '../../lib/errors'
+import { NurseSseParser } from './nurseSse'
 import './Dashboard.css'
 
 interface NurseChatMsg {
@@ -10,7 +12,7 @@ interface NurseChatMsg {
 }
 
 interface Props {
-  onMissionReady: (projectDir: string, skillLevel: string) => void
+  onMissionReady: (projectDir: string, skillLevel: string) => Promise<void>
   onOpenSettings: () => void
 }
 
@@ -85,27 +87,54 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const [pastTopics, setPastTopics] = useState<string[]>([])
   const nurseChatBottomRef = useRef<HTMLDivElement>(null)
   const nurseChatInputRef = useRef<HTMLInputElement>(null)
+  const nurseAbortRef = useRef<AbortController | null>(null)
+  const missionLoadRef = useRef<AbortController | null>(null)
+  const missionCreationRef = useRef<AbortController | null>(null)
+  const startupRef = useRef({ isTestMode, testScenarios, getDailyMission, getDailyHistory, today, todayStr })
+  const selectMissionRef = useRef<(mission: MissionRecord) => void>(() => undefined)
+  const sendNurseMessageRef = useRef<(message: string, history: NurseChatMsg[]) => void>(() => undefined)
 
   // VN 시나리오별 대사/이미지 정의
   const vnSequence = {
     greeting: [
-      { img: '/greeting.png', text: '어서 오세요! 오늘도 열심히 해봐요. 응원하고 있을게요~' },
+      { img: '/greeting.webp', text: '어서 오세요! 오늘도 열심히 해봐요. 응원하고 있을게요~' },
     ],
     same_day_failed: [
-      { img: '/same_day_failed.png', text: '어? 아직 오늘의 미션을 완료하지 않으셨잖아요! 마저 해야 합니다!' },
+      { img: '/same_day_failed.webp', text: '어? 아직 오늘의 미션을 완료하지 않으셨잖아요! 마저 해야 합니다!' },
     ],
     yesterday_failed: [
-      { img: '/punishment.png', text: '어제 훈련을 빠지셨네요... 꾸준함이 재활의 핵심입니다!' },
-      { img: '/punishment.png', text: '오늘은 꼭 완료하셔야 해요. 화이팅! 💪' },
+      { img: '/punishment.webp', text: '어제 훈련을 빠지셨네요... 꾸준함이 재활의 핵심입니다!' },
+      { img: '/punishment.webp', text: '오늘은 꼭 완료하셔야 해요. 화이팅! 💪' },
     ],
     streak_failed: [
-      { img: '/streak_failed.png', text: '진짜 죽어볼래요?' },
-      { img: '/streak_failed.png', text: '(말이 없다)' },
+      { img: '/streak_failed.webp', text: '어제 흐름이 끊겼네요. 오늘은 가볍게 다시 시작해봐요.' },
+      { img: '/streak_failed.webp', text: '작은 단계 하나부터 다시 이어가면 됩니다.' },
     ],
   }
 
   const currentSlides = vnSequence[vnScenario]
   const currentSlide = currentSlides[vnStep]
+
+  function finishVnIntro() {
+    setVnFading(true)
+    window.setTimeout(() => {
+      setVnVisible(false)
+      setVnFading(false)
+      if (!testModeActive) {
+        setNurseChatVisible(true)
+        if (todayMissions.length > 0) {
+          setNurseChatMode('choice')
+          setNurseChatHistory([{
+            role: 'nurse',
+            content: `오늘 이미 훈련이 ${todayMissions.length}개 있네요! 기존 훈련을 계속할까요, 아니면 새로운 걸 만들어볼까요?`,
+          }])
+        } else {
+          setNurseChatMode('chat')
+          sendNurseMessage('__init__', [])
+        }
+      }
+    }, 420)
+  }
 
   function advanceVn() {
     if (vnFading) return
@@ -119,110 +148,85 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
         setVnStep(0)
         setTestScenarioIndex(prev => prev + 1)
       } else {
-        // 모든 시나리오 완료
-        setVnFading(true)
-        setTimeout(() => {
-          setVnVisible(false)
-          setVnFading(false)
-        }, 420)
+        finishVnIntro()
       }
     } else {
-      setVnFading(true)
-      setTimeout(() => {
-        setVnVisible(false)
-        setVnFading(false)
-        if (!testModeActive) {
-          setNurseChatVisible(true)
-          if (todayMissions.length > 0) {
-            // 오늘 미션 있음 → 선택 모드
-            setNurseChatMode('choice')
-            setNurseChatHistory([{
-              role: 'nurse',
-              content: `오늘 이미 훈련이 ${todayMissions.length}개 있네요! 기존 훈련을 계속할까요, 아니면 새로운 걸 만들어볼까요?`,
-            }])
-          } else {
-            // 오늘 미션 없음 → 대화로 추천
-            setNurseChatMode('chat')
-            sendNurseMessage('__init__', [])
-          }
-        }
-      }, 420)
+      finishVnIntro()
     }
-  }
-
-  function parseTopicsFromText(text: string): TopicSuggestion[] {
-    const match = text.match(/\[TOPICS\]([\s\S]*?)\[\/TOPICS\]/)
-    if (!match) return []
-    const lines = match[1].trim().split('\n').filter(l => l.trim().startsWith('{'))
-    const result: TopicSuggestion[] = []
-    for (const line of lines) {
-      try {
-        const t = JSON.parse(line.trim())
-        if (t.name && t.slug && t.difficulty) result.push(t)
-      } catch { /* skip */ }
-    }
-    return result
   }
 
   async function sendNurseMessage(userMsg: string, currentHistory: NurseChatMsg[]) {
+    nurseAbortRef.current?.abort()
+    const abort = new AbortController()
+    nurseAbortRef.current = abort
     setNurseChatLoading(true)
     const isInit = userMsg === '__init__'
-
     const histForApi = isInit ? [] : currentHistory
-
-    const stream = await nurseChat(
-      isInit ? '안녕하세요! 오늘 어떤 훈련을 할까요?' : userMsg,
-      histForApi,
-      pastTopics,
-    )
-
-    if (!stream) {
-      setNurseChatLoading(false)
-      return
-    }
-
-    let nurseReply = ''
     const newHistory: NurseChatMsg[] = isInit
       ? []
       : [...currentHistory, { role: 'user' as const, content: userMsg }]
 
-    setNurseChatHistory([...newHistory, { role: 'nurse', content: '' }])
+    try {
+      const stream = await nurseChat(
+        isInit ? '안녕하세요! 오늘 어떤 훈련을 할까요?' : userMsg,
+        histForApi,
+        pastTopics,
+        abort.signal,
+      )
+      let nurseReply = ''
+      setNurseChatHistory([...newHistory, { role: 'nurse', content: '' }])
 
-    const reader = stream.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
+      const reader = stream.getReader()
+      const decoder = new TextDecoder()
+      const parser = new NurseSseParser()
+      let streamComplete = false
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const { text } = JSON.parse(line.slice(6))
-            if (text) {
-              nurseReply += text
-              setNurseChatHistory([...newHistory, { role: 'nurse', content: nurseReply }])
-            }
-          } catch { /* skip */ }
+      const consumeEvents = (events: ReturnType<NurseSseParser['push']>) => {
+        for (const event of events) {
+          if (event.type === 'message') {
+            nurseReply += event.text
+            setNurseChatHistory([...newHistory, { role: 'nurse', content: nurseReply }])
+          } else if (event.type === 'topics') {
+            setNurseChatSuggestedTopics(event.topics)
+          } else if (event.type === 'done') {
+            streamComplete = true
+          }
         }
       }
-    }
 
-    const suggested = parseTopicsFromText(nurseReply)
-    if (suggested.length > 0) {
-      setNurseChatSuggestedTopics(suggested)
-    }
+      try {
+        while (!streamComplete) {
+          const { done, value } = await reader.read()
+          if (done) {
+            consumeEvents(parser.push(decoder.decode()))
+            consumeEvents(parser.finish())
+            break
+          }
+          consumeEvents(parser.push(decoder.decode(value, { stream: true })))
+        }
+        if (streamComplete) await reader.cancel().catch(() => undefined)
+      } finally {
+        reader.releaseLock()
+      }
 
-    const finalHistory: NurseChatMsg[] = [...newHistory, { role: 'nurse', content: nurseReply }]
-    setNurseChatHistory(finalHistory)
-    setNurseChatLoading(false)
-    setTimeout(() => {
-      nurseChatBottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-      nurseChatInputRef.current?.focus()
-    }, 50)
+      if (!streamComplete) throw new Error('간호사 응답이 완료되기 전에 연결이 종료되었습니다.')
+      setNurseChatHistory([...newHistory, { role: 'nurse', content: nurseReply }])
+    } catch (error: unknown) {
+      if (!abort.signal.aborted) {
+        const message = getErrorMessage(error)
+        setNurseChatHistory([...newHistory, { role: 'nurse', content: `응답을 불러오지 못했습니다: ${message}` }])
+        setError(message)
+      }
+    } finally {
+      if (nurseAbortRef.current === abort) {
+        nurseAbortRef.current = null
+        setNurseChatLoading(false)
+        setTimeout(() => {
+          nurseChatBottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+          nurseChatInputRef.current?.focus()
+        }, 50)
+      }
+    }
   }
 
   function handleNurseChatSubmit() {
@@ -234,6 +238,9 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   }
 
   function closeNurseChat() {
+    nurseAbortRef.current?.abort()
+    nurseAbortRef.current = null
+    setNurseChatLoading(false)
     setNurseChatFading(true)
     setTimeout(() => {
       setNurseChatVisible(false)
@@ -253,6 +260,13 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const mainRef = useRef<HTMLDivElement>(null)
   const calendarRef = useRef<HTMLDivElement>(null)
   const initializerRef = useRef(false)
+  selectMissionRef.current = (mission) => {
+    closeNurseChat()
+    setTimeout(() => handleLoadMission(mission), 350)
+  }
+  sendNurseMessageRef.current = (message, history) => {
+    void sendNurseMessage(message, history)
+  }
 
   // 키보드: mission-select 모드
   useEffect(() => {
@@ -267,7 +281,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       } else if (e.key === 'Enter') {
         e.preventDefault()
         const m = todayMissions[nurseMissionSelIdx]
-        if (m) { closeNurseChat(); setTimeout(() => handleLoadMission(m), 350) }
+        if (m) selectMissionRef.current(m)
       } else if (e.key === 'Escape') {
         setNurseChatMode('choice')
       }
@@ -286,22 +300,36 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       } else if (e.key === '2') {
         setNurseChatMode('chat')
         setNurseChatHistory([])
-        sendNurseMessage('__init__', [])
+        sendNurseMessageRef.current('__init__', [])
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [nurseChatVisible, nurseChatMode])
 
+  useEffect(() => () => {
+    nurseAbortRef.current?.abort()
+    missionLoadRef.current?.abort()
+    missionCreationRef.current?.abort()
+  }, [])
+
   useEffect(() => {
     if (initializerRef.current) return
     initializerRef.current = true
+    const {
+      isTestMode: initialTestMode,
+      testScenarios: initialTestScenarios,
+      getDailyMission: fetchDailyMission,
+      getDailyHistory: fetchDailyHistory,
+      today: initialToday,
+      todayStr: initialTodayStr,
+    } = startupRef.current
 
     // 테스트 모드: 바로 첫 시나리오 표시
-    if (isTestMode) {
+    if (initialTestMode) {
       setTestModeActive(true)
       setVnFading(false)
-      setVnScenario(testScenarios[0])
+      setVnScenario(initialTestScenarios[0])
       setVnStep(0)
       setVnVisible(true)
       setTestScenarioIndex(0)
@@ -310,8 +338,8 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     }
 
     Promise.all([
-      getDailyMission().catch(() => ({ missions: [], topics: [] })),
-      getDailyHistory(),
+      fetchDailyMission(),
+      fetchDailyHistory(),
     ])
       .then(([daily, hist]) => {
         const missions: MissionRecord[] = daily.missions || []
@@ -329,14 +357,14 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
 
         // 마지막 접속 날짜 확인
         const lastAccessDate = localStorage.getItem('lastAccessDate')
-        const isSameDayAccess = lastAccessDate === todayStr
+        const isSameDayAccess = lastAccessDate === initialTodayStr
 
         // 어제, 그저께 날짜 계산
-        const yesterday = new Date(today)
+        const yesterday = new Date(initialToday)
         yesterday.setDate(yesterday.getDate() - 1)
         const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`
 
-        const dayBeforeYesterday = new Date(today)
+        const dayBeforeYesterday = new Date(initialToday)
         dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2)
         const dayBeforeYesterdayStr = `${dayBeforeYesterday.getFullYear()}-${String(dayBeforeYesterday.getMonth() + 1).padStart(2, '0')}-${String(dayBeforeYesterday.getDate()).padStart(2, '0')}`
 
@@ -372,7 +400,11 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
         setVnVisible(true)
 
         // 현재 접속 날짜 저장
-        localStorage.setItem('lastAccessDate', todayStr)
+        localStorage.setItem('lastAccessDate', initialTodayStr)
+      })
+      .catch((error: unknown) => {
+        setVnVisible(false)
+        setError(getErrorMessage(error))
       })
       .finally(() => setLoading(false))
   }, [])
@@ -401,40 +433,51 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       await deleteProject(mission.project_dir)
       setAllHistory(prev => prev.filter(m => m.id !== mission.id))
       setTodayMissions(prev => prev.filter(m => m.id !== mission.id))
-    } catch (e: any) {
-      setError(e.message)
+    } catch (error: unknown) {
+      setError(getErrorMessage(error))
     }
   }
 
   async function handleLoadMission(mission: MissionRecord) {
+    if (missionLoadRef.current) return
+    const abort = new AbortController()
+    missionLoadRef.current = abort
     setLoadingMissionId(mission.id)
     try {
-      const data = await loadProject(mission.project_dir)
+      const data = await loadProject(mission.project_dir, abort.signal)
       if (data.error) throw new Error(data.error)
-      onMissionReady(mission.project_dir, data.skillLevel || 'normal')
-    } catch (e: any) {
-      setError(e.message)
+      await onMissionReady(mission.project_dir, data.skillLevel || 'normal')
+    } catch (error: unknown) {
+      if (!isAbortError(error)) setError(getErrorMessage(error))
     } finally {
-      setLoadingMissionId(null)
+      if (missionLoadRef.current === abort) {
+        missionLoadRef.current = null
+        setLoadingMissionId(null)
+      }
     }
   }
 
   async function handleCreateNewMission(topic: string, slug: string) {
-    if (!topic || !slug) return
+    if (!topic || !slug || missionCreationRef.current) return
+    const abort = new AbortController()
+    missionCreationRef.current = abort
     setConfirming(true)
     setError('')
     setCreatingProgress({ stage: 'setup', message: '준비 중...' })
     try {
       const data = await confirmDailyMissionStream(topic, slug, (stage, message) => {
         setCreatingProgress({ stage, message })
-      })
+      }, abort.signal)
       if (!data?.project_dir) throw new Error('프로젝트 생성에 실패했습니다')
-      onMissionReady(data.project_dir, userSettings?.skill_level || 'normal')
-    } catch (e: any) {
-      setError(e.message)
+      await onMissionReady(data.project_dir, userSettings?.skill_level || 'normal')
+    } catch (error: unknown) {
+      if (!isAbortError(error)) setError(getErrorMessage(error))
     } finally {
-      setConfirming(false)
-      setCreatingProgress(null)
+      if (missionCreationRef.current === abort) {
+        missionCreationRef.current = null
+        setConfirming(false)
+        setCreatingProgress(null)
+      }
     }
   }
 
@@ -474,7 +517,8 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       const isSelected = dateStr === selectedDate
 
       cells.push(
-        <div
+        <button
+          type="button"
           key={dateStr}
           className={[
             'calendar-day',
@@ -484,10 +528,11 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           ].filter(Boolean).join(' ')}
           onClick={() => handleDateClick(dateStr)}
           title={`${dateStr} (${count}개 미션)`}
+          aria-pressed={isSelected}
         >
           <span className="day-number">{day}</span>
           {count > 0 && <span className="day-dot" />}
-        </div>
+        </button>
       )
     }
 
@@ -522,7 +567,9 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           </div>
 
           <nav className="dashboard-nav">
-            <div className="nav-item active">🏥 재활 대시보드</div>
+            <div className="nav-item active">
+              <span aria-hidden="true">🏥</span><span className="nav-label">재활 대시보드</span>
+            </div>
           </nav>
 
           {/* 선택된 날짜 훈련 기록 */}
@@ -543,16 +590,23 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
                   <div
                     key={m.id}
                     className="sidebar-mission-item"
-                    onClick={() => handleLoadMission(m)}
                   >
-                    <div className="sidebar-mission-topic">{m.topic}</div>
-                    <div className="sidebar-mission-meta">
-                      {loadingMissionId === m.id ? '준비중...' : m.project_dir.split('/').slice(-1)[0]}
-                    </div>
-                    <span className={`project-status ${m.status === 'completed' ? 'completed' : ''}`}>
-                      {m.status === 'completed' ? '완료' : '진행 중'}
-                    </span>
                     <button
+                      type="button"
+                      className="sidebar-mission-open"
+                      onClick={() => void handleLoadMission(m)}
+                      disabled={loadingMissionId !== null}
+                    >
+                      <span className="sidebar-mission-topic">{m.topic}</span>
+                      <span className="sidebar-mission-meta">
+                        {loadingMissionId === m.id ? '준비중…' : m.project_dir.split('/').slice(-1)[0]}
+                      </span>
+                      <span className={`project-status ${m.status === 'completed' ? 'completed' : ''}`}>
+                        {m.status === 'completed' ? '완료' : '진행 중'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
                       className="mission-delete-btn"
                       onClick={(e) => {
                         e.stopPropagation()
@@ -560,7 +614,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
                           handleDeleteMission(m)
                         }
                       }}
-                      title="미션 삭제"
+                      aria-label={`${m.topic} 미션 삭제`}
                     >
                       🗑
                     </button>
@@ -571,8 +625,11 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           </div>
 
           <div className="sidebar-settings-btn">
-            <div className="nav-item" onClick={onOpenSettings}>⚙ 설정</div>
-            <div
+            <button type="button" className="nav-item" onClick={onOpenSettings}>
+              <span aria-hidden="true">⚙</span><span className="nav-label">설정</span>
+            </button>
+            <button
+              type="button"
               className={`nav-item ${testModeActive ? 'active' : ''}`}
               onClick={() => {
                 const newTestMode = !testModeActive
@@ -588,8 +645,8 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
               }}
               title="시나리오 테스트 모드"
             >
-              🧪 테스트
-            </div>
+              <span aria-hidden="true">🧪</span><span className="nav-label">테스트</span>
+            </button>
           </div>
         </div>
 
@@ -609,7 +666,28 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           <div
             className={`vn-intro ${vnFading ? 'vn-fade-out' : 'vn-fade-in'}`}
             onClick={advanceVn}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                advanceVn()
+              }
+              if (event.key === 'Escape') finishVnIntro()
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="오늘의 학습 안내"
+            tabIndex={0}
           >
+            <button
+              type="button"
+              className="vn-skip-btn"
+              onClick={(event) => {
+                event.stopPropagation()
+                finishVnIntro()
+              }}
+            >
+              건너뛰기
+            </button>
             {/* 우측 캐릭터 — 이미지 전환 시 key로 재마운트해 애니메이션 재실행 */}
             <div className="vn-character" key={`${vnScenario}-${vnStep}`}>
               <img
@@ -637,7 +715,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           <div className={`vn-intro nurse-chat-overlay ${nurseChatFading ? 'vn-fade-out' : 'vn-fade-in'}`}>
             <div className="vn-character nurse-chat-char">
               <img
-                src="/greeting.png"
+                src="/greeting.webp"
                 alt="간호사"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
               />
@@ -801,6 +879,9 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
               <p className="error-message">{friendlyError(error)}</p>
               {isSettingsError(error) && (
                 <button className="btn btn-primary" onClick={onOpenSettings}>설정으로 이동</button>
+              )}
+              {!isSettingsError(error) && (
+                <button className="btn btn-primary" onClick={() => window.location.reload()}>다시 시도</button>
               )}
             </div>
           )}

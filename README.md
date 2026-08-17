@@ -1,190 +1,211 @@
 # coding-tutor
 
-AI 기반 코딩 튜터 플랫폼. Google 로그인 후 매일 AI가 학습 주제 3개를 제안하고, 선택한 주제로 프로젝트를 자동 생성합니다. 의도적으로 구멍(HOLE)과 버그(BUG)가 있는 코드를 제공하고, 파일 변경을 감지해 Gemini가 실시간 피드백을 스트리밍합니다.
+개인용 AI 코딩 튜터입니다. Vercel은 정적 React 화면만 호스팅하고, 파일 접근·코드 실행·AI 호출은 Mac에서 실행하는 단일 `clinic` 프로세스가 담당합니다.
 
-## 아키텍처
+## 확정 아키텍처
 
-두 개의 독립 바이너리로 완전 분리되어 있습니다.
-
-```
-tutor.abcfe.net  (홈서버, cmd/homeserver)
-├── 프론트엔드 frontend/dist/ 서빙
-├── /api/user/*, /api/daily/*, /api/chat, /api/explain
-├── /api/project/nextstep|complete|delete
-├── /api/ai/proxy  ← 로컬 watcher가 Gemini를 여기를 통해 호출
-└── Gemini API key + Supabase credentials 전부 여기만
-
-localhost:47291  (로컬 바이너리, cmd/clinic — 유저가 실행)
-├── /api/fs/*               — 파일 R/W
-├── /api/run, /api/test     — 코드 실행
-├── /api/project/setup|apply-step|read-all|status|load|...
-├── /ws                     — 파일 변경 감지 + AI 피드백 브로드캐스트
-└── /ws/lsp, /ws/terminal
+```text
+Vercel (frontend/dist)
+  ├─ Supabase Auth: Google 로그인
+  └─ HTTPS → http/ws://127.0.0.1:47291
+                  clinic
+                  ├─ Codex CLI 또는 Gemini
+                  ├─ 프로젝트 파일 / watcher / snapshot
+                  ├─ run / test / LSP / terminal
+                  └─ Supabase REST: 설정·미션 기록
 ```
 
-**로컬 바이너리에는 Supabase/Gemini 키가 없습니다.** 브라우저가 REMOTE(AI 생성) → LOCAL(파일 쓰기)를 오케스트레이션합니다.
+홈서버는 필요하지 않습니다. Vercel 화면은 계속 열 수 있지만 프로젝트 생성·편집·AI 피드백을 사용할 때는 해당 Mac에서 `clinic`만 실행하면 됩니다. 외부에 포트를 열거나 24시간 켜둘 필요도 없습니다. `127.0.0.1`은 화면을 연 기기 자신을 뜻하므로 Vercel URL도 clinic이 실행 중인 같은 Mac의 Chrome에서 여세요. 휴대폰이나 다른 PC에서 연 화면은 Mac의 clinic에 연결되지 않습니다.
 
-## 사전 요구사항
+## ChatGPT 구독 사용
 
-| 도구 | 버전 | 용도 |
-|------|------|------|
-| Go | 1.21+ | 백엔드 서버 |
-| Node.js | 18+ | 프론트엔드 빌드 |
-| npm | 9+ | 패키지 관리 |
-
-외부 서비스:
-- **[Supabase](https://supabase.com)** — 인증(Google OAuth) + DB
-- **[Google AI Studio](https://aistudio.google.com)** — Gemini API Key
-
-## 빠른 시작
-
-### 1. 저장소 클론
+기본 AI 공급자는 `codex`입니다. 로컬의 공식 Codex CLI가 저장된 ChatGPT 로그인을 사용하며, 앱이 OpenAI API 키를 호출하지 않습니다.
 
 ```bash
-git clone https://github.com/coding-tutor/coding-tutor.git
-cd coding-tutor
+codex login
+codex login status
 ```
 
-### 2. 홈서버 설정
+ChatGPT 구독료가 OpenAI API 크레딧으로 전환되는 것은 아닙니다. 이 프로젝트의 Codex 모드는 공식 `codex exec` 자동화 기능을 사용하므로 Codex가 포함된 ChatGPT 요금제의 사용량 제한을 따릅니다. 로그아웃되었거나 한도에 도달하면 clinic이 원인을 오류로 표시합니다.
 
-```bash
-cp homeserver.toml.example homeserver.toml
-```
-
-`homeserver.toml` 편집:
+Gemini는 선택형 예비 공급자입니다.
 
 ```toml
+ai_provider = "gemini"
+
 [gemini]
-api_key = "AIzaSy..."                          # Google AI Studio에서 발급
-model   = "gemini-2.0-flash"
-
-[server]
-port = "8080"
-
-[supabase]
-url              = "https://xxxx.supabase.co"  # Supabase 프로젝트 URL
-anon_key         = "eyJ..."                    # Settings > API > anon key
-service_role_key = "eyJ..."                    # Settings > API > service_role key
-jwt_secret       = "your-jwt-secret"           # Settings > API > JWT Secret
+api_key = "..."
+model = "gemini-3.6-flash"
 ```
 
-### 3. 프론트엔드 설정
+## 준비
+
+- Go 1.25+
+- Node.js 24 LTS 및 npm
+- Codex CLI와 ChatGPT 로그인(기본 모드)
+- Supabase 프로젝트(Google Auth, 설정·미션 DB)
+- Chrome 권장: 최초 접속 시 로컬 네트워크 권한을 허용해야 합니다.
+
+학습 프로젝트를 실행·테스트할 언어 도구도 Mac에 미리 설치해야 합니다. clinic은 패키지를 자동 설치하지 않으며 Node 도구는 `npx --no-install`로만 실행합니다.
+
+| 언어 | 실행·테스트 계약 |
+|---|---|
+| Go | `go run .`, `go test ./...` |
+| Python | `python3 main.py`, `python3 -m pytest` |
+| Rust | `cargo run`, `cargo test` |
+| TypeScript | 로컬 `ts-node`, `jest`; 진입점 `src/index.ts` |
+| JavaScript | `node index.js`, 로컬 `jest` |
+
+## 로컬 설정
 
 ```bash
+cp config.toml.example config.toml
 cp frontend/.env.example frontend/.env
 ```
 
-`frontend/.env` 편집:
+`config.toml`에는 Supabase 서버 자격 증명을 넣습니다. `service_role_key`와 Gemini 키는 절대 `frontend/.env` 또는 `VITE_*` 변수에 넣지 마세요.
 
-```env
-VITE_SUPABASE_URL=https://xxxx.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJ...
-VITE_REMOTE_URL=https://tutor.abcfe.net   # 홈서버 URL (로컬 개발 시 http://localhost:8080)
-VITE_LOCAL_URL=http://localhost:47291
+```toml
+ai_provider = "codex"
+
+[codex]
+executable = "" # 비우면 PATH와 ~/.local/bin/codex를 검색
+model = ""      # 비우면 Codex CLI 기본 모델
+
+[server]
+port = "47291"
+
+[supabase]
+url = "https://your-project.supabase.co"
+anon_key = "your-anon-key"
+service_role_key = "your-service-role-key"
+jwt_secret = "" # Supabase가 HS256 토큰을 쓰는 경우에만 필요
 ```
 
-### 4. Supabase DB 초기화
+`frontend/.env`에는 공개 가능한 anon 값만 둡니다.
 
-Supabase 대시보드 → SQL Editor에서 아래 쿼리 실행:
+```dotenv
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+
+혼자만 쓰도록 계정을 고정하려면 clinic 실행 환경에 Supabase 사용자 UUID를 지정합니다.
+
+```bash
+ALLOWED_USER_ID=your-user-uuid ./bin/clinic ~/learning
+```
+
+## Supabase 스키마
 
 ```sql
-CREATE TABLE user_settings (
-  user_id      UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  base_dir     TEXT NOT NULL,
-  language     TEXT NOT NULL DEFAULT 'go',
-  skill_level  TEXT NOT NULL DEFAULT 'normal',
-  updated_at   TIMESTAMPTZ DEFAULT NOW()
+create table user_settings (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  base_dir text not null default '',
+  language text not null default 'Go',
+  skill_level text not null default 'normal',
+  updated_at timestamptz not null default now()
 );
 
--- UNIQUE 제약 없음 — 하루에 여러 미션 허용
-CREATE TABLE daily_missions (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id      UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  date         DATE NOT NULL,
-  topic        TEXT NOT NULL,
-  slug         TEXT NOT NULL,
-  project_dir  TEXT NOT NULL,
-  status       TEXT DEFAULT 'active',
-  created_at   TIMESTAMPTZ DEFAULT NOW()
+create table daily_missions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null,
+  topic text not null,
+  slug text not null,
+  project_dir text not null,
+  status text not null default 'active',
+  created_at timestamptz not null default now()
 );
+
+-- 기존 설치는 먼저 중복을 확인하세요. 결과가 있으면 백업 후 아래 CTE로
+-- completed 행을 우선 보존하고 나머지 중복만 정리합니다.
+select user_id, project_dir, count(*)
+from daily_missions
+group by user_id, project_dir
+having count(*) > 1;
+
+with ranked as (
+  select id, row_number() over (
+    partition by user_id, project_dir
+    order by (status = 'completed') desc nulls last,
+             created_at desc nulls last, id
+  ) as duplicate_rank
+  from daily_missions
+)
+delete from daily_missions d
+using ranked r
+where d.id = r.id and r.duplicate_rank > 1;
+
+-- /api/daily/finalize의 동시·재시도를 한 행으로 직렬화합니다.
+create unique index if not exists daily_missions_user_project_dir_uidx
+  on daily_missions (user_id, project_dir);
+
+alter table user_settings enable row level security;
+alter table daily_missions enable row level security;
+
+create policy "user settings are private" on user_settings
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "daily missions are private" on daily_missions
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 ```
 
-### 5. Supabase Google OAuth 활성화
+Supabase Authentication에서 Google provider를 활성화하고 Vercel production URL을 허용된 redirect URL로 등록하세요.
 
-Supabase 대시보드 → Authentication → Providers → Google 활성화 후 Client ID/Secret 입력.
-
-Redirect URL: `https://xxxx.supabase.co/auth/v1/callback`
-
-### 6. 의존성 설치 및 실행
+## 개발과 빌드
 
 ```bash
-# 프론트엔드 의존성 설치
-cd frontend && npm install && cd ..
+npm --prefix frontend ci
+make dev DIR=~/learning
 
-# 개발 모드 (터미널 3개)
-make dev-homeserver          # 홈서버 :8080
-make dev-be DIR=~/learning   # 로컬 서버 :47291 (학습 파일 저장 디렉토리 지정)
-make dev-fe                  # 프론트엔드 :5173 (Vite dev server)
+make test
+make build
+./bin/clinic ~/learning
 ```
 
-브라우저에서 `http://localhost:5173` 접속.
+개발 화면은 `http://localhost:5173`, clinic은 `http://127.0.0.1:47291`입니다. Vercel 기본 도메인(`https://<project>.vercel.app`)이나 다른 custom domain을 쓰면 해당 production origin을 `ALLOWED_ORIGINS=https://your-domain.example` 형태로 clinic 실행 환경에 추가합니다.
 
-> **로컬 서버의 base_dir** 은 config 파일이 아닌 CLI 인자로 지정합니다.
-> `DIR` 생략 시 현재 디렉토리, `BASE_DIR` 환경변수도 사용 가능합니다.
+## Vercel 배포
 
-## 프로덕션 빌드
+Vercel 프로젝트 설정은 다음과 같습니다.
 
-```bash
-make build              # 로컬 바이너리: bin/coding-tutor (build-fe 포함)
-make build-homeserver   # 홈서버 바이너리: bin/coding-tutor-server (build-fe 포함)
+| 항목 | 값 |
+|---|---|
+| Root Directory | `frontend` |
+| Install Command | `npm ci` |
+| Build Command | `npm run build` |
+| Output Directory | `dist` |
 
-# 실행
-./bin/coding-tutor-server          # 홈서버 :8080
-./bin/coding-tutor ~/learning      # 로컬 서버 :47291
-```
+`frontend/vercel.json`이 SPA rewrite와 정적 자산 캐시·보안 헤더를 설정합니다. Vercel에는 `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`만 등록합니다. 기본 clinic 주소는 `http://127.0.0.1:47291`이므로 Vercel에서 `VITE_LOCAL_URL`을 따로 설정하지 않습니다. CSP는 `127.0.0.1`과 `localhost`의 명시적 포트를 허용합니다. 포트를 변경할 때는 `config.toml`의 `[server].port`와 빌드 시 `VITE_LOCAL_URL`만 같은 loopback 주소·포트로 맞추면 되며, `frontend/vercel.json`은 수정하지 않습니다.
 
-환경변수로 homeserver.toml을 오버라이드할 수 있습니다:
+## 확인된 문제와 조치
 
-```bash
-GEMINI_API_KEY=... SUPABASE_URL=... ./bin/coding-tutor-server
-```
+| 우선순위 | 기존 문제 | 조치 |
+|---|---|---|
+| P0 | 홈서버와 로컬 서버를 동시에 유지해야 함 | Vercel 정적 UI + 단일 clinic으로 통합 |
+| P0 | 로컬 REST/terminal/LSP가 인증 없이 열림 | Supabase JWT, 고정 Origin·loopback Host 검증, WS subprotocol 인증 |
+| P0 | API·AI 파일명이 BaseDir 밖을 읽거나 쓸 수 있음 | canonical path/symlink 검사와 파일 수·크기 제한 |
+| P0 | 생성 코드가 임의 테스트로 자동 실행됨 | 자동 실행 기본 비활성, 명시적 Run/Test만 허용 |
+| P1 | Gemini 전용이고 preview 모델이 오래됨 | Codex CLI 기본, Gemini stable 선택형 |
+| P1 | 자유 형식 JSON·TUTORSYS·프롬프트 인젝션 가능 | JSON Schema, 커리큘럼 전이·언어별 실행 계약 의미 검증, 불신 데이터 경계, 입력 예산 적용 |
+| P1 | 모델의 완료 문구만으로 다음 단계가 열림 | 전체 테스트 성공과 HOLE/BUG/END 0개를 서버가 직접 확인 |
+| P1 | DB 미션 생성과 로컬 파일 생성 사이에 상태가 갈림 | 파일 setup 성공 뒤 멱등 `daily/finalize`로 active 행 확정 |
+| P1 | 빠른 탭 전환 시 자동 저장이 다른 파일을 덮어쓸 수 있음 | 파일별 저장 큐, 전환 시 flush, 실패 toast 적용 |
+| P1 | loopback·인증 오류가 영구 로딩이나 무응답으로 보임 | 오류 종류/상태별 안내, 재연결·계정 전환, 스트림 `finally` 정리 적용 |
+| P1 | 파일 rename/delete 실패를 성공처럼 처리함 | 공통 JWT API와 HTTP 상태 검증 후에만 탭·트리 갱신 |
+| P1 | symlink 삭제·rename이 실제 대상을 지우거나 기존 파일을 덮음 | destructive 경로의 symlink 거부, rename 충돌 409 처리 |
+| P1 | 스냅샷 복원이 새 단계 파일을 남기거나 현재 변경을 경고 없이 되돌림 | 관리 파일 exact restore, 비관리 파일 보존, 사용자 확인 적용 |
+| P1 | 실행 자식 프로세스가 clinic 비밀 환경변수를 상속함 | Codex·run/test·watcher·terminal·LSP·gopls 공통 secret scrub 적용 |
+| P1 | 초기 JS 973KB | route/component lazy loading으로 최대 chunk 약 412KB |
+| P1 | 정적 이미지 약 49MB | 실제 사용 이미지 WebP 변환 후 약 440KB |
+| P1 | watcher가 의존성·숨김 폴더까지 순회 | 공통 ignore, 새 디렉터리·삭제 diff 처리 |
 
-## LSP 자동완성 (선택)
+## 보안 동작
 
-에디터에서 `fmt.` 입력 시 자동완성을 사용하려면 언어 서버를 설치합니다. 미설치 시에도 기본 기능은 동작하며 정규식 기반 fallback이 사용됩니다.
+- clinic은 `127.0.0.1`에만 바인딩합니다.
+- `/health` 외 REST 요청은 로그인 JWT가 필요합니다.
+- WebSocket JWT는 URL/query가 아닌 subprotocol로 전달합니다.
+- terminal/LSP 자식 프로세스에는 Gemini·Supabase·OpenAI 비밀 환경변수를 전달하지 않습니다.
+- Codex 실행은 임시 빈 작업공간, read-only sandbox, 도구 비활성화, 단일 동시 실행, JSON Schema를 사용합니다.
+- Vercel preview domain은 기본 허용하지 않습니다. production/custom domain을 명시적으로 등록하세요.
 
-```bash
-# Go
-go install golang.org/x/tools/gopls@latest
-
-# TypeScript / JavaScript
-npm install -g typescript-language-server typescript
-
-# Python
-pip install python-lsp-server
-
-# Rust
-rustup component add rust-analyzer
-```
-
-## 주요 기능
-
-- **매일 미션**: 비주얼 노벨 스타일 간호사 채팅으로 학습 주제 3개 제안. 하루에 여러 미션 추가 가능
-- **실시간 피드백**: 파일 저장 시 Gemini가 코드 변경을 분석해 WebSocket으로 피드백 스트리밍
-- **HOLE / BUG 마커**: 구현해야 할 부분(노란 하이라이트)과 의도된 버그(빨간 하이라이트)
-- **뉴비 모드**: 직접 코드 타이핑, 단계적 힌트 공개(3단계), HOLE 순차 잠금
-- **LSP 자동완성**: gopls 등 언어 서버 연동, `Cmd+S`로 포맷 & 저장
-- **단계 진행**: AI가 다음 단계 커리큘럼과 코드를 자동 생성, 스냅샷으로 이전 단계 복원 가능
-- **Cmd+P / Cmd+Shift+F**: 파일 빠른 열기 / 전체 텍스트 검색
-
-## 환경변수 목록
-
-| 변수 | homeserver.toml 키 | 설명 |
-|------|-------------------|------|
-| `GEMINI_API_KEY` | `gemini.api_key` | Gemini API 키 |
-| `GEMINI_MODEL` | `gemini.model` | 사용할 모델명 |
-| `PORT` | `server.port` | 홈서버 포트 (기본 8080) |
-| `SUPABASE_URL` | `supabase.url` | Supabase 프로젝트 URL |
-| `SUPABASE_ANON_KEY` | `supabase.anon_key` | Supabase anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | `supabase.service_role_key` | Supabase service role key |
-| `SUPABASE_JWT_SECRET` | `supabase.jwt_secret` | Supabase JWT secret |
+Safari는 HTTPS 페이지에서 평문 loopback 연결을 제한할 수 있으므로 현재 배포 구조는 Chrome을 기준으로 합니다.

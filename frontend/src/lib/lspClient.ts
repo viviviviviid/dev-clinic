@@ -1,5 +1,6 @@
 // LSP JSON-RPC 2.0 client over WebSocket
 import { WS_BASE } from './api'
+import { supabase } from './supabase'
 
 interface Location {
   uri: string
@@ -33,6 +34,59 @@ interface LspTextEdit {
   newText: string
 }
 
+type LspDocumentation = string | { kind: string; value: string }
+
+interface LspParameterInformation {
+  label: string | [number, number]
+  documentation?: LspDocumentation
+}
+
+interface LspSignatureInformation {
+  label: string
+  documentation?: LspDocumentation
+  parameters?: LspParameterInformation[]
+}
+
+interface LspSignatureHelp {
+  signatures: LspSignatureInformation[]
+  activeSignature?: number
+  activeParameter?: number
+}
+
+interface LspCommand {
+  title: string
+  command: string
+  arguments?: unknown[]
+}
+
+interface LspCodeAction {
+  title: string
+  kind?: string
+  isPreferred?: boolean
+  command?: LspCommand
+}
+
+interface LspWorkspaceEdit {
+  changes?: Record<string, LspTextEdit[]>
+}
+
+interface LspInlayHintLabelPart {
+  value: string
+}
+
+interface LspInlayHint {
+  position: { line: number; character: number }
+  label: string | LspInlayHintLabelPart[]
+  kind?: number
+  paddingLeft?: boolean
+  paddingRight?: boolean
+}
+
+interface LspCodeLens {
+  range: LspTextEdit['range']
+  command?: LspCommand
+}
+
 interface LspDiagnostic {
   range: {
     start: { line: number; character: number }
@@ -56,6 +110,10 @@ interface LspHover {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 // Maps file extension → LSP language ID (when it differs from Monaco's lang name)
 const LSP_LANG_ID: Record<string, string> = {
   go: 'go',
@@ -75,6 +133,7 @@ class LspClient {
   private fileVersions = new Map<string, number>()
   private initialized = false
   private nextId = 1
+  private connectionGeneration = 0
   private statusListeners: Array<(ready: boolean) => void> = []
   private diagnosticListeners: Array<(uri: string, diagnostics: LspDiagnostic[]) => void> = []
 
@@ -96,40 +155,74 @@ class LspClient {
     this.statusListeners.forEach(cb => cb(ready))
   }
 
-  async connect(lang: string, rootPath: string, token: string): Promise<void> {
+  async connect(lang: string, rootPath: string): Promise<void> {
     this.disconnect()
+    const generation = this.connectionGeneration
 
-    const url = `${WS_BASE}/ws/lsp?lang=${encodeURIComponent(lang)}&root=${encodeURIComponent(rootPath)}&token=${encodeURIComponent(token)}`
+    const { data, error } = await supabase.auth.getSession()
+    if (generation !== this.connectionGeneration) return
+    const accessToken = data.session?.access_token
+    if (error || !accessToken) {
+      throw new Error('LSP 연결에 필요한 로그인 정보가 없습니다.')
+    }
+
+    const url = `${WS_BASE}/ws/lsp?lang=${encodeURIComponent(lang)}&root=${encodeURIComponent(rootPath)}`
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(url)
+      const ws = new WebSocket(url, ['coding-tutor', accessToken])
       this.ws = ws
+      let settled = false
+      const settle = (error?: unknown) => {
+        if (settled) return
+        settled = true
+        if (error) reject(error)
+        else resolve()
+      }
+      const isCurrent = () => generation === this.connectionGeneration && this.ws === ws
 
       ws.onopen = async () => {
+        if (!isCurrent()) {
+          ws.close()
+          settle()
+          return
+        }
         try {
           await this.initialize(rootPath)
+          if (!isCurrent()) {
+            settle()
+            return
+          }
           this.initialized = true
           this.emitStatus(true)
-          resolve()
+          settle()
         } catch (e) {
-          reject(e)
+          settle(isCurrent() ? e : undefined)
         }
       }
 
-      ws.onerror = (e) => reject(e)
+      ws.onerror = (e) => settle(isCurrent() ? e : undefined)
       ws.onclose = () => {
+        if (!isCurrent()) {
+          settle()
+          return
+        }
+        this.ws = null
         this.initialized = false
         this.emitStatus(false)
         for (const [, p] of this.pending) {
           p.reject(new Error('LSP WebSocket closed'))
         }
         this.pending.clear()
+        settle(new Error('LSP WebSocket closed before initialization'))
       }
-      ws.onmessage = (e) => this.onMessage(e.data as string)
+      ws.onmessage = (e) => {
+        if (isCurrent()) this.onMessage(e.data as string)
+      }
     })
   }
 
   disconnect(): void {
+    this.connectionGeneration += 1
     if (this.ws) {
       this.ws.close()
       this.ws = null
@@ -137,6 +230,9 @@ class LspClient {
     this.initialized = false
     this.openedUris.clear()
     this.fileVersions.clear()
+    for (const [, request] of this.pending) {
+      request.reject(new Error('LSP disconnected'))
+    }
     this.pending.clear()
     this.emitStatus(false)
     this.diagnosticListeners.forEach(cb => cb('*', []))
@@ -259,7 +355,7 @@ class LspClient {
     this.fileVersions.delete(uri)
   }
 
-  async signatureHelp(filePath: string, line: number, char: number): Promise<any> {
+  async signatureHelp(filePath: string, line: number, char: number): Promise<LspSignatureHelp | null> {
     const uri = `file://${filePath}`
     const result = await Promise.race([
       this.request('textDocument/signatureHelp', {
@@ -268,14 +364,14 @@ class LspClient {
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
     ])
-    return result ?? null
+    return result as LspSignatureHelp | null
   }
 
   async codeAction(
     filePath: string,
     range: { startLine: number; startChar: number; endLine: number; endChar: number },
-    diagnostics: any[] = [],
-  ): Promise<any[]> {
+    diagnostics: LspDiagnostic[] = [],
+  ): Promise<LspCodeAction[]> {
     const uri = `file://${filePath}`
     const result = await Promise.race([
       this.request('textDocument/codeAction', {
@@ -289,7 +385,7 @@ class LspClient {
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ])
     if (!result) return []
-    return result as any[]
+    return result as LspCodeAction[]
   }
 
   async rename(
@@ -297,7 +393,7 @@ class LspClient {
     line: number,
     char: number,
     newName: string,
-  ): Promise<any> {
+  ): Promise<LspWorkspaceEdit | null> {
     const uri = `file://${filePath}`
     const result = await Promise.race([
       this.request('textDocument/rename', {
@@ -307,14 +403,14 @@ class LspClient {
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ])
-    return result ?? null
+    return result as LspWorkspaceEdit | null
   }
 
   async inlayHints(
     filePath: string,
     startLine: number,
     endLine: number,
-  ): Promise<any[] | null> {
+  ): Promise<LspInlayHint[] | null> {
     const uri = `file://${filePath}`
     const result = await Promise.race([
       this.request('textDocument/inlayHint', {
@@ -326,10 +422,10 @@ class LspClient {
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
     ])
-    return result as any[] ?? null
+    return (result as LspInlayHint[] | null) ?? null
   }
 
-  async codeLens(filePath: string): Promise<any[] | null> {
+  async codeLens(filePath: string): Promise<LspCodeLens[] | null> {
     const uri = `file://${filePath}`
     const result = await Promise.race([
       this.request('textDocument/codeLens', {
@@ -337,7 +433,7 @@ class LspClient {
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ])
-    return result as any[] ?? null
+    return (result as LspCodeLens[] | null) ?? null
   }
 
   async hover(
@@ -416,14 +512,16 @@ class LspClient {
   }
 
   private onMessage(data: string): void {
-    let msg: any
+    let parsed: unknown
     try {
-      msg = JSON.parse(data)
+      parsed = JSON.parse(data) as unknown
     } catch {
       return
     }
+    if (!isRecord(parsed)) return
+    const msg = parsed
 
-    if ('id' in msg && msg.id !== undefined) {
+    if (typeof msg.id === 'number') {
       const pending = this.pending.get(msg.id)
       if (pending) {
         this.pending.delete(msg.id)
@@ -437,8 +535,9 @@ class LspClient {
     }
 
     // Server-initiated notifications
-    if (msg.method === 'textDocument/publishDiagnostics' && msg.params) {
-      const { uri, diagnostics } = msg.params as { uri: string; diagnostics: LspDiagnostic[] }
+    if (msg.method === 'textDocument/publishDiagnostics' && isRecord(msg.params)) {
+      const { uri, diagnostics } = msg.params
+      if (typeof uri !== 'string' || !Array.isArray(diagnostics)) return
       this.diagnosticListeners.forEach(cb => cb(uri, diagnostics))
     }
   }

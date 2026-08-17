@@ -3,14 +3,21 @@ import MonacoEditor, { type OnMount, useMonaco } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
 import { useStore } from '../../store'
 import { useProject } from '../../hooks/useProject'
-import { supabase } from '../../lib/supabase'
 import { lspClient } from '../../lib/lspClient'
 import type { Location as LspLocation, LspDiagnostic } from '../../lib/lspClient'
 import type { DiagnosticItem } from '../../store'
 import QuizOverlay from './QuizOverlay'
 import ConceptPanel from './ConceptPanel'
 import './Editor.css'
-import { LOCAL } from '../../lib/api'
+import { apiFetch, apiJson } from '../../lib/api'
+import { getErrorMessage } from '../../lib/errors'
+import { replaceTutorMarkerAtIndex } from './markerRanges'
+import {
+  createEditorAutosave,
+  installEditorAutosaveLifecycle,
+  type EditorAutosave,
+} from './autosave'
+import { createTestRunRequest } from './testRun'
 
 type DecorCollection = editor.IEditorDecorationsCollection
 
@@ -28,6 +35,17 @@ const LANG_MAP: Record<string, string> = {
   toml: 'toml',
   yaml: 'yaml',
   yml: 'yaml',
+}
+
+const LSP_SERVER_MAP: Record<string, string> = {
+  go: 'gopls',
+  typescript: 'typescript-language-server',
+  typescriptreact: 'typescript-language-server',
+  javascript: 'typescript-language-server',
+  javascriptreact: 'typescript-language-server',
+  python: 'pylsp',
+  rust: 'rust-analyzer',
+  sol: 'nomicfoundation-solidity-language-server',
 }
 
 function detectLanguage(path: string): string {
@@ -113,48 +131,6 @@ function applyDecorations(
   collectionRef.current = editorInstance.createDecorationsCollection(decorations)
 }
 
-function replaceHoleAtIndex(content: string, holeIndex: number, code: string): string {
-  const lines = content.split('\n')
-  let count = 0
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes('[TUTOR:HOLE]')) {
-      if (count === holeIndex) {
-        // Remove marker line + all following comment-only lines (hint block)
-        let end = i
-        while (end + 1 < lines.length && lines[end + 1].trimStart().startsWith('//')) end++
-        const indent = lines[i].match(/^(\s*)/)?.[1] ?? ''
-        const indented = code.split('\n').map(l => indent + l.trimStart()).join('\n')
-        lines.splice(i, end - i + 1, indented)
-        break
-      }
-      count++
-    }
-  }
-  return lines.join('\n')
-}
-
-function replaceBugAtIndex(content: string, bugIndex: number, code: string): string {
-  const lines = content.split('\n')
-  let count = 0
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes('[TUTOR:BUG]')) {
-      if (count === bugIndex) {
-        // Remove marker line + all following comment-only lines, then remove the buggy code line
-        let end = i
-        while (end + 1 < lines.length && lines[end + 1].trimStart().startsWith('//')) end++
-        // end+1 is the actual buggy code line — remove it too
-        const totalToRemove = (end - i + 1) + (end + 1 < lines.length ? 1 : 0)
-        const indent = lines[i].match(/^(\s*)/)?.[1] ?? ''
-        const indented = code.split('\n').map(l => indent + l.trimStart()).join('\n')
-        lines.splice(i, totalToRemove, indented)
-        break
-      }
-      count++
-    }
-  }
-  return lines.join('\n')
-}
-
 // LSP Location → Monaco Location 변환 + 모델 사전 생성 (순수 함수, 이동 없음)
 // provideDefinition에서만 사용 — Monaco가 link decoration/peek을 위해 호출할 때 side effect 없어야 함
 async function resolveDefinition(
@@ -192,39 +168,32 @@ async function resolveDefinition(
 }
 
 // ANSI 색상 코드를 HTML span으로 변환 (최소한: 빨강/초록/리셋)
+const ANSI_ESCAPE = String.fromCharCode(27)
+const ANSI_PATTERN = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, 'g')
+
 function ansiToHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/\x1b\[31m/g, '<span class="run-stderr">')
-    .replace(/\x1b\[32m/g, '<span class="run-success">')
-    .replace(/\x1b\[0m/g, '</span>')
-    .replace(/\x1b\[[0-9;]*m/g, '') // 나머지 ANSI 코드 제거
+    .split(`${ANSI_ESCAPE}[31m`).join('<span class="run-stderr">')
+    .split(`${ANSI_ESCAPE}[32m`).join('<span class="run-success">')
+    .split(`${ANSI_ESCAPE}[0m`).join('</span>')
+    .replace(ANSI_PATTERN, '') // 나머지 ANSI 코드 제거
 }
 
 // Read a file via API (usable outside React hooks, e.g. in Monaco provider callbacks)
 async function readFileViaApi(absPath: string): Promise<string> {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers: Record<string, string> = {}
-  if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
-  const res = await fetch(`${LOCAL}/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
-  if (!res.ok) throw new Error(`readFile failed: ${res.status}`)
-  const data = await res.json()
+  const res = await apiFetch(`/api/fs/read?path=${encodeURIComponent(absPath)}`)
+  const data = await res.json() as { content?: string }
   return data.content ?? ''
 }
 
 async function fetchGitDiff(filePath: string, projectDir: string): Promise<Array<{lineNum: number; type: string}>> {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers: Record<string, string> = {}
-  if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
   try {
-    const res = await fetch(
-      `/api/fs/git-diff?path=${encodeURIComponent(filePath)}&dir=${encodeURIComponent(projectDir)}`,
-      { headers }
+    return await apiJson<Array<{ lineNum: number; type: string }>>(
+      `/api/fs/git-diff?path=${encodeURIComponent(filePath)}&dir=${encodeURIComponent(projectDir)}`
     )
-    if (!res.ok) return []
-    return await res.json()
   } catch { return [] }
 }
 
@@ -315,7 +284,9 @@ export default function Editor() {
     pendingNavigate,
     setPendingNavigate,
     showMinimap,
+    addToast,
   } = useStore()
+  const filename = openFile ? openFile.split('/').pop() || openFile : ''
   const { writeFile } = useProject()
   const writeFileRef = useRef(writeFile)
   useEffect(() => { writeFileRef.current = writeFile }, [writeFile])
@@ -323,7 +294,7 @@ export default function Editor() {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const decorationRef = useRef<DecorCollection | null>(null)
   const gitDiffCollectionRef = useRef<DecorCollection | null>(null)
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autosaveRef = useRef<EditorAutosave | null>(null)
   const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null)
   // definition 이동 대상 위치 (cross-file): state 대신 ref로 관리해 React 렌더 사이클과 분리
   const pendingNavigateRef = useRef<{ path: string; line: number; column: number } | null>(null)
@@ -336,7 +307,27 @@ export default function Editor() {
   const openFileContentRef = useRef<string>(openFileContent)
   const diagnosticsCacheRef = useRef<Map<string, import('monaco-editor').editor.IMarkerData[]>>(new Map())
 
-  useEffect(() => { openFileRef.current = openFile }, [openFile])
+  useEffect(() => {
+    const autosave = createEditorAutosave({
+      delayMs: 500,
+      write: (path, content) => writeFileRef.current(path, content),
+      onSaved: markFileSaved,
+      onError: (path, error) => addToast(`${path.split('/').pop() || path} 저장 실패: ${getErrorMessage(error)}`, 'error'),
+    })
+    autosaveRef.current = autosave
+    const removeLifecycleListeners = installEditorAutosaveLifecycle(autosave)
+    return () => {
+      removeLifecycleListeners()
+      if (autosaveRef.current === autosave) autosaveRef.current = null
+      void autosave.flushAll()
+    }
+  }, [addToast, markFileSaved])
+
+  useEffect(() => {
+    const previousFile = openFileRef.current
+    if (previousFile && previousFile !== openFile) void autosaveRef.current?.flushPath(previousFile)
+    openFileRef.current = openFile
+  }, [openFile])
   useEffect(() => { openFileContentRef.current = openFileContent }, [openFileContent])
 
   // 파일이 열릴 때 캐시된 진단 적용은 handleMount에서 처리
@@ -432,7 +423,7 @@ export default function Editor() {
     const disposables = LANGS.flatMap((lang) => [
       // Formatting provider (Cmd+S → LSP textDocument/formatting)
       monacoInstance.languages.registerDocumentFormattingEditProvider(lang, {
-        async provideDocumentFormattingEdits(_model) {
+        async provideDocumentFormattingEdits() {
           const filePath = openFileRef.current
           if (!filePath || !lspClient.isReady) return []
           const edits = await lspClient.formatting(filePath).catch(() => null)
@@ -555,12 +546,12 @@ export default function Editor() {
           if (!result?.signatures?.length) return null
           return {
             value: {
-              signatures: result.signatures.map((sig: any) => ({
+              signatures: result.signatures.map((sig) => ({
                 label: sig.label,
                 documentation: typeof sig.documentation === 'string'
                   ? sig.documentation
                   : sig.documentation?.value ?? '',
-                parameters: (sig.parameters ?? []).map((p: any) => ({
+                parameters: (sig.parameters ?? []).map((p) => ({
                   label: p.label,
                   documentation: typeof p.documentation === 'string'
                     ? p.documentation
@@ -599,7 +590,7 @@ export default function Editor() {
             diags,
           ).catch(() => [])
           return {
-            actions: actions.map((a: any) => ({
+            actions: actions.map((a) => ({
               title: a.title,
               kind: a.kind ?? '',
               isPreferred: a.isPreferred ?? false,
@@ -626,7 +617,7 @@ export default function Editor() {
           if (!result) return null
           const edits: import('monaco-editor').languages.IWorkspaceTextEdit[] = []
           const changes = result.changes ?? {}
-          for (const [uri, textEdits] of Object.entries(changes) as [string, any[]][]) {
+          for (const [uri, textEdits] of Object.entries(changes)) {
             for (const te of textEdits) {
               edits.push({
                 resource: monacoInstance.Uri.parse(uri),
@@ -660,11 +651,11 @@ export default function Editor() {
           ).catch(() => null)
           if (!hints?.length) return { hints: [], dispose() {} }
           return {
-            hints: hints.map((h: any) => ({
+            hints: hints.map((h) => ({
               position: { lineNumber: h.position.line + 1, column: h.position.character + 1 },
               label: typeof h.label === 'string'
                 ? h.label
-                : h.label.map((p: any) => p.value).join(''),
+                : h.label.map((p) => p.value).join(''),
               kind: h.kind === 1
                 ? monacoInstance.languages.InlayHintKind.Type
                 : monacoInstance.languages.InlayHintKind.Parameter,
@@ -684,7 +675,7 @@ export default function Editor() {
           const lenses = await lspClient.codeLens(filePath).catch(() => null)
           if (!lenses?.length) return { lenses: [], dispose() {} }
           return {
-            lenses: lenses.map((lens: any) => ({
+            lenses: lenses.map((lens) => ({
               range: {
                 startLineNumber: lens.range.start.line + 1,
                 startColumn: lens.range.start.character + 1,
@@ -793,7 +784,7 @@ export default function Editor() {
       cmdDisposable.dispose()
       testLensDisposable.dispose()
     }
-  }, [monacoInstance])
+  }, [monacoInstance, projectStatus?.dir])
 
   // Monaco 마커 변경 → setDiagnostics
   useEffect(() => {
@@ -862,7 +853,7 @@ export default function Editor() {
       ed.focus()
       pendingNavigateRef.current = null
     }
-  }, [openFile, monacoInstance])
+  }, [filename, monacoInstance, openFile, openFileContent, skillLevel, solvedHoles])
 
   // readOnly 변경 시 에디터 옵션 업데이트
   useEffect(() => {
@@ -950,9 +941,20 @@ export default function Editor() {
   const [runOutput, setRunOutput] = useState<string[]>([])
   const [outputTitle, setOutputTitle] = useState('실행 결과')
   const [showOutput, setShowOutput] = useState(false)
+  const [hasOutputSession, setHasOutputSession] = useState(false)
   const outputEndRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
 
-  const filename = openFile ? openFile.split('/').pop() || openFile : ''
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      const activeRequest = abortRef.current
+      abortRef.current = null
+      activeRequest?.abort()
+    }
+  }, [])
 
   const handleMount: OnMount = useCallback((ed, monaco) => {
     editorRef.current = ed
@@ -984,15 +986,11 @@ export default function Editor() {
       const filePath = openFileRef.current
       if (!filePath) return
       markFileChanged(filePath)
+      const store = useStore.getState()
+      store.setStepComplete(false)
+      store.setTestResult(null)
       lspClient.notifyChange(filePath, content)
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-      saveTimer.current = setTimeout(async () => {
-        const fp = openFileRef.current
-        if (fp) {
-          await writeFileRef.current(fp, content)
-          markFileSaved(fp)
-        }
-      }, 500)
+      autosaveRef.current?.schedule(filePath, content)
     })
 
     // Cmd+S / Ctrl+S: format then save
@@ -1001,9 +999,8 @@ export default function Editor() {
       const content = ed.getValue()
       const filePath = openFileRef.current
       if (filePath) {
-        await writeFileRef.current(filePath, content)
-        markFileSaved(filePath)
-        lspClient.notifySave(filePath)
+        const saved = await autosaveRef.current?.saveNow(filePath, content)
+        if (saved) lspClient.notifySave(filePath)
       }
     })
 
@@ -1028,7 +1025,7 @@ export default function Editor() {
         await navigateCrossFileRef.current(absPath, loc.range.start.line + 1, loc.range.start.character + 1)
       }
     })
-  }, [])
+  }, [markFileChanged, setOpenFileContent])
 
   // 콘텐츠/스킬/solvedHoles 변경 시 데코레이션 재적용 (외부 갱신 반영)
   useEffect(() => {
@@ -1041,7 +1038,7 @@ export default function Editor() {
       model.setValue(openFileContent)
     }
     applyDecorations(ed, openFileContent, filename, skillLevel, solvedHoles, decorationRef)
-  }, [openFileContent, skillLevel, solvedHoles])
+  }, [filename, monacoInstance, openFile, openFileContent, skillLevel, solvedHoles])
 
   // 출력 추가될 때마다 하단 스크롤
   useEffect(() => {
@@ -1049,36 +1046,37 @@ export default function Editor() {
   }, [runOutput])
 
   async function handleQuizSolve(key: string, correctCode: string, markerType: string, markerIndex: number) {
-    markHoleSolved(key)
-    const newContent = markerType === 'bug'
-      ? replaceBugAtIndex(openFileContent, markerIndex, correctCode)
-      : replaceHoleAtIndex(openFileContent, markerIndex, correctCode)
+    const newContent = replaceTutorMarkerAtIndex(
+      openFileContent,
+      markerType === 'bug' ? 'bug' : 'hole',
+      markerIndex,
+      correctCode,
+    )
+    if (newContent === openFileContent) {
+      addToast('과제 마커 범위를 찾지 못해 코드를 적용하지 않았습니다.', 'error')
+      return
+    }
     setOpenFileContent(newContent)
-    if (openFile) await writeFile(openFile, newContent)
+    if (openFile && await autosaveRef.current?.saveNow(openFile, newContent)) markHoleSolved(key)
   }
 
   async function streamOutput(endpoint: string, title: string, setActive: (v: boolean) => void) {
+    if (!mountedRef.current) return
     setActive(true)
     setRunOutput([])
     setOutputTitle(title)
     setShowOutput(true)
+    setHasOutputSession(true)
+
+    const abort = new AbortController()
+    abortRef.current = abort
 
     try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const runHeaders: Record<string, string> = {}
-      if (session?.access_token) runHeaders['Authorization'] = `Bearer ${session.access_token}`
-      const response = await fetch(endpoint, { headers: runHeaders })
-      console.log(`[streamOutput] ${endpoint} → status=${response.status}, ok=${response.ok}`)
-      if (!response.ok || !response.body) {
-        let msg = `[오류] 요청 실패 (${response.status})`
-        try {
-          const body = await response.json()
-          if (body.error) msg += ': ' + body.error
-        } catch { /* ignore */ }
-        setRunOutput([msg])
-        setActive(false)
-        return
-      }
+      // Run and test the latest editor contents, not the last debounce snapshot.
+      await autosaveRef.current?.flushAll()
+      if (abort.signal.aborted) return
+      const response = await apiFetch(endpoint, { signal: abort.signal })
+      if (!response.body) throw new Error('실행 스트림 응답이 비어 있습니다.')
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -1093,8 +1091,8 @@ export default function Editor() {
         buffer = chunks.pop() ?? ''
 
         for (const chunk of chunks) {
+          if (!mountedRef.current) return
           if (!chunk.trim()) continue
-          console.log('[sse chunk]', JSON.stringify(chunk))
           if (chunk.startsWith('event: done')) {
             setActive(false)
             continue
@@ -1105,41 +1103,39 @@ export default function Editor() {
           }
         }
       }
-    } catch (e: any) {
-      setRunOutput((prev) => [...prev, '[오류] ' + e.message])
+    } catch (error: unknown) {
+      if (mountedRef.current && !(error instanceof Error && error.name === 'AbortError')) {
+        setRunOutput((prev) => [...prev, '[오류] ' + getErrorMessage(error)])
+      }
     } finally {
-      setActive(false)
+      if (abortRef.current === abort) abortRef.current = null
+      if (mountedRef.current) setActive(false)
     }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort()
   }
 
   async function handleRun() {
-    if (isRunning || isTesting) return
-    streamOutput(`${LOCAL}/api/run`, '실행 결과', setIsRunning)
+    if (isRunning || isTesting || abortRef.current) return
+    await streamOutput('/api/run', '실행 결과', setIsRunning)
   }
 
-  useEffect(() => {
-    handleTestFuncRef.current = (funcName: string) => {
-      if (isRunning || isTesting) return
-      const url = funcName ? `${LOCAL}/api/test?func=${encodeURIComponent(funcName)}` : `${LOCAL}/api/test`
-      const title = funcName ? `테스트: ${funcName}` : '테스트 결과'
-      streamOutput(url, title, setIsTesting)
-    }
-  }, [isRunning, isTesting])
-
-  if (!openFile) {
-    return (
-      <div className="editor-empty">
-        <div className="editor-empty-content">
-          <span className="editor-empty-icon">{'</>'}</span>
-          <p>파일을 선택하면 에디터가 열립니다</p>
-          <p className="editor-hint">
-            <span className="hint-yellow">■</span> HOLE: 구현할 부분 &nbsp;
-            <span className="hint-red">■</span> BUG: 버그가 있는 부분
-          </p>
-        </div>
-      </div>
-    )
+  async function handleTest(testName?: string) {
+    if (isRunning || isTesting || abortRef.current) return
+    const request = createTestRunRequest(testName)
+    await streamOutput(request.endpoint, request.title, setIsTesting)
   }
+
+  handleTestFuncRef.current = (funcName: string) => { void handleTest(funcName) }
+
+  const activeLanguageServer = openFile ? LSP_SERVER_MAP[detectLanguage(openFile)] : undefined
+  const lspStatusTitle = lspReady
+    ? 'LSP 연결됨 (자동완성 활성)'
+    : activeLanguageServer
+      ? `LSP 미연결 (${activeLanguageServer} 및 clinic 연결 확인)`
+      : 'LSP 미연결 (언어 서버 및 clinic 연결 확인)'
 
   return (
     <div className="editor-container">
@@ -1171,24 +1167,31 @@ export default function Editor() {
         <div className="editor-tab-actions">
           <button
             className={`run-btn ${isRunning ? 'running' : ''}`}
-            onClick={handleRun}
-            disabled={isRunning || isTesting}
-            title="코드 실행 (▶)"
+            onClick={isRunning ? handleStop : () => { void handleRun() }}
+            disabled={!projectStatus || (isTesting && !isRunning)}
+            title={!projectStatus ? '프로젝트를 먼저 열어주세요' : isRunning ? '실행 중단' : '코드 실행 (▶)'}
           >
             {isRunning ? (
-              <><span className="run-spinner" /> 실행 중...</>
+              <>■ 중단</>
             ) : (
               <>▶ 실행</>
             )}
           </button>
-          {isTesting && (
-            <span className="run-btn test-btn running" style={{ pointerEvents: 'none' }}>
-              <span className="run-spinner" /> 테스트 중...
-            </span>
-          )}
+          <button
+            className={`run-btn test-btn ${isTesting ? 'running' : ''}`}
+            onClick={isTesting ? handleStop : () => { void handleTest() }}
+            disabled={!projectStatus || (isRunning && !isTesting)}
+            title={!projectStatus ? '프로젝트를 먼저 열어주세요' : isTesting ? '전체 테스트 중단' : '전체 테스트 실행 및 단계 완료 확인'}
+          >
+            {isTesting ? (
+              <>■ 중단</>
+            ) : (
+              <>✓ 전체 테스트</>
+            )}
+          </button>
           <span
             className={`lsp-status ${lspReady ? 'lsp-ready' : 'lsp-off'}`}
-            title={lspReady ? 'LSP 연결됨 (자동완성 활성)' : 'LSP 미연결 (gopls 설치 필요)'}
+            title={lspStatusTitle}
           >
             ● LSP
           </span>
@@ -1199,7 +1202,7 @@ export default function Editor() {
           >
             📖 개념
           </button>
-          {showOutput && (
+          {hasOutputSession && (
             <button
               className="run-output-toggle"
               onClick={() => setShowOutput((v) => !v)}
@@ -1211,51 +1214,64 @@ export default function Editor() {
         </div>
       </div>
 
-      {/* Monaco + Quiz overlay */}
-      <div className="editor-monaco-wrapper">
-        <MonacoEditor
-          theme="vs-dark"
-          height="100%"
-          width="100%"
-          onMount={handleMount}
-          options={{
-            fontSize: 14,
-            fontFamily: "'Consolas', 'Courier New', monospace",
-            lineNumbers: 'on',
-            minimap: { enabled: showMinimap },
-            scrollBeyondLastLine: true,
-            wordWrap: 'on',
-            glyphMargin: true,
-            folding: true,
-            renderLineHighlight: 'line',
-            tabSize: 2,
-            insertSpaces: true,
-            padding: { top: 8 },
-            quickSuggestions: { other: true, comments: false, strings: true },
-            suggestOnTriggerCharacters: true,
-            acceptSuggestionOnCommitCharacter: true,
-            wordBasedSuggestions: 'off',
-            codeLens: true,
-          }}
-        />
-        {skillLevel === 'newbie' && editorInstance && openFile && (
-          <QuizOverlay
-            editor={editorInstance}
-            filename={filename}
-            content={openFileContent}
-            quizData={quizData}
-            solvedHoles={solvedHoles}
-            onSolve={handleQuizSolve}
+      {openFile ? (
+        /* Monaco + Quiz overlay */
+        <div className="editor-monaco-wrapper">
+          <MonacoEditor
+            theme="vs-dark"
+            height="100%"
+            width="100%"
+            onMount={handleMount}
+            options={{
+              fontSize: 14,
+              fontFamily: "'Consolas', 'Courier New', monospace",
+              lineNumbers: 'on',
+              minimap: { enabled: showMinimap },
+              scrollBeyondLastLine: true,
+              wordWrap: 'on',
+              glyphMargin: true,
+              folding: true,
+              renderLineHighlight: 'line',
+              tabSize: 2,
+              insertSpaces: true,
+              padding: { top: 8 },
+              quickSuggestions: { other: true, comments: false, strings: true },
+              suggestOnTriggerCharacters: true,
+              acceptSuggestionOnCommitCharacter: true,
+              wordBasedSuggestions: 'off',
+              codeLens: true,
+            }}
           />
-        )}
-        {showConcept && (
-          <ConceptPanel
-            concept={projectStatus?.concept ?? ''}
-            tasks={projectStatus?.tasks ?? ''}
-            onClose={() => setShowConcept(false)}
-          />
-        )}
-      </div>
+          {skillLevel === 'newbie' && editorInstance && (
+            <QuizOverlay
+              editor={editorInstance}
+              filename={filename}
+              content={openFileContent}
+              quizData={quizData}
+              solvedHoles={solvedHoles}
+              onSolve={handleQuizSolve}
+            />
+          )}
+          {showConcept && (
+            <ConceptPanel
+              concept={projectStatus?.concept ?? ''}
+              tasks={projectStatus?.tasks ?? ''}
+              onClose={() => setShowConcept(false)}
+            />
+          )}
+        </div>
+      ) : (
+        <div className="editor-empty">
+          <div className="editor-empty-content">
+            <span className="editor-empty-icon">{'</>'}</span>
+            <p>파일을 선택하면 에디터가 열립니다</p>
+            <p className="editor-hint">
+              <span className="hint-yellow">■</span> HOLE: 구현할 부분 &nbsp;
+              <span className="hint-red">■</span> BUG: 버그가 있는 부분
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* 실행 출력 패널 */}
       {showOutput && (
@@ -1263,7 +1279,12 @@ export default function Editor() {
           <div className="run-output-header">
             <span>{outputTitle}</span>
             {(isRunning || isTesting) && <span className="run-output-running">● 실행 중</span>}
-            <button className="run-output-close" onClick={() => setShowOutput(false)}>✕</button>
+            <button
+              className="run-output-close"
+              onClick={() => setShowOutput(false)}
+              title="출력 패널 닫기"
+              aria-label="출력 패널 닫기"
+            >✕</button>
           </div>
           <div className="run-output-body">
             {runOutput.length === 0 && (isRunning || isTesting) && (

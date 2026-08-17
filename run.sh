@@ -1,40 +1,9 @@
 #!/bin/bash
-# coding-tutor homeserver control script
-# Usage: ./run.sh [start|stop|restart|status|logs]
+set -euo pipefail
 
-NAME="coding-tutor"
-BIN="./bin/coding-tutor-server"
+# Build and run the single local clinic backend.
+# Usage: ./run.sh [project-base-directory]
 
-case "$1" in
-  start)
-    echo "Building..."
-    make build-homeserver || exit 1
-    echo "Starting..."
-    pm2 restart $NAME 2>/dev/null || pm2 start $BIN --name $NAME
-    pm2 save
-    ;;
-  stop)
-    pm2 stop $NAME
-    ;;
-  restart)
-    pm2 restart $NAME
-    ;;
-  status)
-    pm2 show $NAME
-    ;;
-  logs)
-    pm2 logs $NAME --lines ${2:-50}
-    ;;
-  deploy)
-    echo "Building..."
-    make build-homeserver
-    echo "Restarting..."
-    pm2 restart $NAME 2>/dev/null || pm2 start $BIN --name $NAME
-    pm2 save
-    echo "Done."
-    ;;
-  *)
-    echo "Usage: $0 {start|stop|restart|status|logs [lines]|deploy}"
-    exit 1
-    ;;
-esac
+project_dir="${1:-.}"
+make build-be
+exec ./bin/clinic "$project_dir"

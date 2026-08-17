@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useProject } from '../../hooks/useProject'
 import type { TopicSuggestion } from '../../hooks/useProject'
+import { getErrorMessage } from '../../lib/errors'
 import './DailyMission.css'
 
 interface Props {
@@ -21,6 +22,7 @@ const WEEKDAYS = ['월', '화', '수', '목', '금', '토', '일']
 
 export default function DailyMissionScreen({ onMissionReady, onOpenSettings }: Props) {
   const { getDailyMission, getDailyHistory, confirmDailyMission, loadProject } = useProject()
+  const initialRequestsRef = useRef({ getDailyMission, getDailyHistory })
 
   const [topics, setTopics] = useState<TopicSuggestion[]>([])
   const [todayMissions, setTodayMissions] = useState<MissionRecord[]>([])
@@ -40,9 +42,13 @@ export default function DailyMissionScreen({ onMissionReady, onOpenSettings }: P
   const [calMonth, setCalMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
 
   useEffect(() => {
+    const { getDailyMission: fetchDailyMission, getDailyHistory: fetchDailyHistory } = initialRequestsRef.current
     Promise.all([
-      getDailyMission().catch(() => ({})),
-      getDailyHistory(),
+      fetchDailyMission().catch(() => ({})),
+      fetchDailyHistory().catch((error: unknown) => {
+        setError(getErrorMessage(error))
+        return []
+      }),
     ])
       .then(([daily, hist]) => {
         const missions: MissionRecord[] = daily.missions || []
@@ -108,8 +114,8 @@ export default function DailyMissionScreen({ onMissionReady, onOpenSettings }: P
       const data = await loadProject(mission.project_dir)
       if (data.error) throw new Error(data.error)
       onMissionReady(mission.project_dir, data.skillLevel || 'normal')
-    } catch (e: any) {
-      setError(e.message)
+    } catch (error: unknown) {
+      setError(getErrorMessage(error))
     } finally {
       setLoadingMissionId(null)
     }
@@ -125,8 +131,8 @@ export default function DailyMissionScreen({ onMissionReady, onOpenSettings }: P
       const data = await confirmDailyMission(topic, slug)
       if (data.error) throw new Error(data.error)
       onMissionReady(data.project_dir, 'normal')
-    } catch (e: any) {
-      setError(e.message)
+    } catch (error: unknown) {
+      setError(getErrorMessage(error))
     } finally {
       setConfirming(false)
     }

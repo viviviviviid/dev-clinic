@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { useStore, type FileEntry } from '../../store'
 import { useProject } from '../../hooks/useProject'
 import { lspClient } from '../../lib/lspClient'
-import { supabase } from '../../lib/supabase'
+import { apiFetch } from '../../lib/api'
+import { getErrorMessage } from '../../lib/errors'
 import './FileTree.css'
-import { LOCAL } from '../../lib/api'
 
 const EXT_TO_LANG: Record<string, string> = {
   go: 'go',
@@ -22,11 +22,8 @@ function detectLanguageFromPath(filePath: string): string {
   return EXT_TO_LANG[ext] || 'plaintext'
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
-  const { data: { session } } = await supabase.auth.getSession()
-  const h: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (session?.access_token) h['Authorization'] = `Bearer ${session.access_token}`
-  return h
+function isAffectedPath(openPath: string, targetPath: string, isDir: boolean): boolean {
+  return openPath === targetPath || (isDir && openPath.startsWith(`${targetPath}/`))
 }
 
 interface ContextMenu {
@@ -46,7 +43,7 @@ interface TreeNodeProps {
 
 function TreeNode({ entry, rootDir, depth, onContextMenu }: TreeNodeProps) {
   const [open, setOpen] = useState(depth === 0)
-  const { openFile, addTab, changedFiles } = useStore()
+  const { openFile, addTab, changedFiles, addToast } = useStore()
   const { readFile } = useProject()
 
   const fullPath = rootDir + '/' + entry.path
@@ -56,9 +53,13 @@ function TreeNode({ entry, rootDir, depth, onContextMenu }: TreeNodeProps) {
       setOpen(!open)
       return
     }
-    const content = await readFile(fullPath)
-    addTab(fullPath, content)
-    lspClient.notifyOpen(fullPath, content, detectLanguageFromPath(fullPath)).catch(() => {})
+    try {
+      const content = await readFile(fullPath)
+      addTab(fullPath, content)
+      lspClient.notifyOpen(fullPath, content, detectLanguageFromPath(fullPath)).catch(() => {})
+    } catch (error: unknown) {
+      addToast(`파일 열기 실패: ${getErrorMessage(error)}`, 'error')
+    }
   }
 
   const isActive = openFile === fullPath
@@ -119,12 +120,12 @@ function getFileIcon(name: string): string {
 }
 
 export default function FileTree() {
-  const { fileTree, projectStatus, closeTab } = useStore()
+  const { fileTree, projectStatus, closeTab, addToast } = useStore()
   const { refreshFileTree } = useProject()
   const dir = projectStatus?.dir || ''
 
   const [ctxMenu, setCtxMenu] = useState<ContextMenu | null>(null)
-  const [renaming, setRenaming] = useState<{ path: string; name: string } | null>(null)
+  const [renaming, setRenaming] = useState<{ path: string; name: string; isDir: boolean } | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
   // Close context menu on outside click
@@ -147,27 +148,57 @@ export default function FileTree() {
 
   function startRename() {
     if (!ctxMenu) return
-    setRenaming({ path: ctxMenu.fullPath, name: ctxMenu.name })
+    setRenaming({ path: ctxMenu.fullPath, name: ctxMenu.name, isDir: ctxMenu.isDir })
     setCtxMenu(null)
   }
 
+  function closeAffectedTabs(targetPath: string, isDir: boolean) {
+    const tabs = useStore.getState().openTabs
+    for (const tab of tabs) {
+      if (isAffectedPath(tab.path, targetPath, isDir)) closeTab(tab.path)
+    }
+  }
+
   async function confirmRename(newName: string) {
-    if (!renaming || !newName.trim() || newName === renaming.name) {
+    const trimmedName = newName.trim()
+    if (!renaming || !trimmedName || trimmedName === renaming.name) {
       setRenaming(null)
       return
     }
+    if (trimmedName === '.' || trimmedName === '..' || trimmedName.includes('/') || trimmedName.includes('\\')) {
+      addToast('파일 이름에는 경로 구분자를 사용할 수 없습니다.', 'error')
+      return
+    }
+    const state = useStore.getState()
+    const hasUnsavedFile = state.openTabs.some((tab) =>
+      isAffectedPath(tab.path, renaming.path, renaming.isDir) && state.changedFiles.has(tab.path),
+    )
+    if (hasUnsavedFile) {
+      addToast('저장 중인 파일이 있습니다. 저장이 끝난 뒤 이름을 변경하세요.', 'error')
+      return
+    }
     const parent = renaming.path.substring(0, renaming.path.lastIndexOf('/'))
-    const newPath = parent + '/' + newName.trim()
+    const newPath = parent + '/' + trimmedName
     try {
-      await fetch(`${LOCAL}/api/fs/rename`, {
+      await apiFetch('/api/fs/rename', {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ from: renaming.path, to: newPath }),
       })
-      closeTab(renaming.path)
-      if (dir) await refreshFileTree(dir)
-    } catch { /* ignore */ }
+    } catch (error: unknown) {
+      addToast(`이름 변경 실패: ${getErrorMessage(error)}`, 'error')
+      setRenaming(null)
+      return
+    }
+
+    closeAffectedTabs(renaming.path, renaming.isDir)
     setRenaming(null)
+    if (dir) {
+      try {
+        await refreshFileTree(dir)
+      } catch (error: unknown) {
+        addToast(`이름은 변경됐지만 파일 목록을 갱신하지 못했습니다: ${getErrorMessage(error)}`, 'error')
+      }
+    }
   }
 
   async function handleDelete() {
@@ -176,14 +207,23 @@ export default function FileTree() {
     setCtxMenu(null)
     if (!window.confirm(`"${target.name}"을(를) 삭제하시겠습니까?`)) return
     try {
-      await fetch(`${LOCAL}/api/fs/delete`, {
+      await apiFetch('/api/fs/delete', {
         method: 'DELETE',
-        headers: await authHeaders(),
         body: JSON.stringify({ path: target.fullPath }),
       })
-      closeTab(target.fullPath)
-      if (dir) await refreshFileTree(dir)
-    } catch { /* ignore */ }
+    } catch (error: unknown) {
+      addToast(`삭제 실패: ${getErrorMessage(error)}`, 'error')
+      return
+    }
+
+    closeAffectedTabs(target.fullPath, target.isDir)
+    if (dir) {
+      try {
+        await refreshFileTree(dir)
+      } catch (error: unknown) {
+        addToast(`삭제는 완료됐지만 파일 목록을 갱신하지 못했습니다: ${getErrorMessage(error)}`, 'error')
+      }
+    }
   }
 
   if (!fileTree.length) {

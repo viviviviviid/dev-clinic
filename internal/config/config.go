@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -14,16 +15,21 @@ type SupabaseConfig struct {
 	JWTSecret      string `toml:"jwt_secret"`
 }
 
-type RemoteConfig struct {
-	AIUrl string `toml:"ai_url"` // e.g. https://tutor.abcfe.net/api/ai/proxy
+type Config struct {
+	AIProvider string         `toml:"ai_provider"`
+	Codex      CodexConfig    `toml:"codex"`
+	Gemini     GeminiConfig   `toml:"gemini"`
+	Server     ServerConfig   `toml:"server"`
+	Supabase   SupabaseConfig `toml:"supabase"`
+	BaseDir    string
 }
 
-type Config struct {
-	Gemini   GeminiConfig   `toml:"gemini"`
-	Server   ServerConfig   `toml:"server"`
-	Supabase SupabaseConfig `toml:"supabase"`
-	Remote   RemoteConfig   `toml:"remote"`
-	BaseDir  string
+type CodexConfig struct {
+	// Executable may be an absolute path or a command discoverable through PATH.
+	Executable string `toml:"executable"`
+	// Model is optional. When empty, codex exec uses the model associated with
+	// the user's existing Codex CLI authentication and product defaults.
+	Model string `toml:"model"`
 }
 
 type GeminiConfig struct {
@@ -35,19 +41,13 @@ type ServerConfig struct {
 	Port string `toml:"port"`
 }
 
-// Build-time defaults — overridden via -ldflags at build time.
-// These allow distributing a zero-config binary to users.
-var (
-	DefaultSupabaseURL            = ""
-	DefaultSupabaseAnonKey        = ""
-	DefaultSupabaseServiceRoleKey = ""
-	DefaultSupabaseJWTSecret      = ""
-	DefaultRemoteAIUrl            = ""
-)
-
 var Global = &Config{
+	AIProvider: "codex",
+	Codex: CodexConfig{
+		Executable: "codex",
+	},
 	Gemini: GeminiConfig{
-		Model: "gemini-2.5-flash-lite-preview-06-17",
+		Model: "gemini-3.6-flash",
 	},
 	Server: ServerConfig{
 		Port: "47291",
@@ -65,11 +65,20 @@ func Load(path string) {
 		log.Fatalf("config: failed to parse %s: %v", path, err)
 	}
 	applyEnv()
-	log.Printf("config: loaded %s (model=%s)", path, Global.Gemini.Model)
+	log.Printf("config: loaded %s (ai_provider=%s)", path, Global.AIProvider)
 }
 
 // applyEnv overrides config with environment variables
 func applyEnv() {
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("AI_PROVIDER"))); v != "" {
+		Global.AIProvider = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CODEX_MODEL")); v != "" {
+		Global.Codex.Model = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CODEX_BIN")); v != "" {
+		Global.Codex.Executable = v
+	}
 	if v := os.Getenv("GEMINI_API_KEY"); v != "" {
 		Global.Gemini.APIKey = v
 	}
@@ -93,28 +102,5 @@ func applyEnv() {
 	}
 	if v := os.Getenv("BASE_DIR"); v != "" {
 		Global.BaseDir = v
-	}
-	if v := os.Getenv("REMOTE_AI_URL"); v != "" {
-		Global.Remote.AIUrl = v
-	}
-	applyBuildDefaults()
-}
-
-// applyBuildDefaults fills in values from ldflags if not already set.
-func applyBuildDefaults() {
-	if Global.Supabase.URL == "" && DefaultSupabaseURL != "" {
-		Global.Supabase.URL = DefaultSupabaseURL
-	}
-	if Global.Supabase.AnonKey == "" && DefaultSupabaseAnonKey != "" {
-		Global.Supabase.AnonKey = DefaultSupabaseAnonKey
-	}
-	if Global.Supabase.ServiceRoleKey == "" && DefaultSupabaseServiceRoleKey != "" {
-		Global.Supabase.ServiceRoleKey = DefaultSupabaseServiceRoleKey
-	}
-	if Global.Supabase.JWTSecret == "" && DefaultSupabaseJWTSecret != "" {
-		Global.Supabase.JWTSecret = DefaultSupabaseJWTSecret
-	}
-	if Global.Remote.AIUrl == "" && DefaultRemoteAIUrl != "" {
-		Global.Remote.AIUrl = DefaultRemoteAIUrl
 	}
 }

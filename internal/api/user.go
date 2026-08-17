@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coding-tutor/internal/config"
@@ -18,12 +19,22 @@ type UserSettings struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+var supportedUserLanguages = map[string]string{
+	"go": "Go", "typescript": "TypeScript", "javascript": "JavaScript",
+	"rust": "Rust", "python": "Python",
+}
+
+func canonicalUserLanguage(value string) (string, bool) {
+	language, ok := supportedUserLanguages[strings.ToLower(strings.TrimSpace(value))]
+	return language, ok
+}
+
 func GetUserSettings(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	var settings []UserSettings
 	err := supabase.Get(
-		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID),
+		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", supabase.FilterValue(userID)),
 		&settings,
 	)
 	if err != nil {
@@ -39,7 +50,18 @@ func GetUserSettings(c *gin.Context) {
 	// Inject server-side base_dir (CLI arg overrides DB value)
 	s := settings[0]
 	s.BaseDir = config.Global.BaseDir
-	c.JSON(http.StatusOK, s)
+	if language, ok := canonicalUserLanguage(s.Language); ok {
+		s.Language = language
+		c.JSON(http.StatusOK, gin.H{
+			"user_id": s.UserID, "base_dir": s.BaseDir, "language": s.Language,
+			"skill_level": s.SkillLevel, "updated_at": s.UpdatedAt, "language_supported": true,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"user_id": s.UserID, "base_dir": s.BaseDir, "language": s.Language,
+		"skill_level": s.SkillLevel, "updated_at": s.UpdatedAt, "language_supported": false,
+	})
 }
 
 func PutUserSettings(c *gin.Context) {
@@ -54,11 +76,22 @@ func PutUserSettings(c *gin.Context) {
 		return
 	}
 
+	language, ok := canonicalUserLanguage(req.Language)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported language"})
+		return
+	}
+	skillLevel := strings.ToLower(strings.TrimSpace(req.SkillLevel))
+	if skillLevel != "newbie" && skillLevel != "normal" && skillLevel != "experienced" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported skill_level"})
+		return
+	}
+
 	settings := UserSettings{
 		UserID:     userID,
 		BaseDir:    config.Global.BaseDir, // always from server config
-		Language:   req.Language,
-		SkillLevel: req.SkillLevel,
+		Language:   language,
+		SkillLevel: skillLevel,
 		UpdatedAt:  time.Now().UTC(),
 	}
 

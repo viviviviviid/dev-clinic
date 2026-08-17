@@ -57,6 +57,7 @@ export interface UserSettings {
   base_dir?: string
   language: string
   skill_level: string
+  language_supported?: boolean
 }
 
 export interface DiagnosticItem {
@@ -68,7 +69,7 @@ export interface DiagnosticItem {
   startColumn: number
 }
 
-interface AppState {
+export interface AppState {
   // Auth
   user: User | null
   setUser: (user: User | null) => void
@@ -108,6 +109,7 @@ interface AppState {
   lastSync: string | null
   addFeedbackChunk: (chunk: string) => void
   startFeedback: () => void
+  cancelFeedback: () => void
   endFeedback: () => void
   setLastSync: (time: string) => void
 
@@ -153,6 +155,7 @@ interface AppState {
   addUserChatMessage: (content: string) => void
   startChatStream: () => void
   addChatChunk: (chunk: string) => void
+  cancelChatStream: () => void
   endChatStream: () => void
 
   // Quick Open / Search Panel
@@ -173,6 +176,69 @@ interface AppState {
   // WebSocket status
   wsStatus: 'connected' | 'reconnecting' | 'disconnected'
   setWsStatus: (s: 'connected' | 'reconnecting' | 'disconnected') => void
+
+  // Atomically clear every project-scoped value before switching projects or users.
+  resetWorkspace: () => void
+}
+
+type WorkspaceState = Pick<AppState,
+  | 'projectDir'
+  | 'projectStatus'
+  | 'fileTree'
+  | 'openFile'
+  | 'openFileContent'
+  | 'openFileReadOnly'
+  | 'changedFiles'
+  | 'openTabs'
+  | 'feedbackMessages'
+  | 'currentStreaming'
+  | 'isStreaming'
+  | 'lastSync'
+  | 'stepComplete'
+  | 'projectComplete'
+  | 'diagnostics'
+  | 'pendingNavigate'
+  | 'snapshots'
+  | 'testResult'
+  | 'quizData'
+  | 'solvedHoles'
+  | 'chatMessages'
+  | 'isChatStreaming'
+  | 'currentChatStreaming'
+  | 'showQuickOpen'
+  | 'showSearchPanel'
+  | 'toasts'
+>
+
+function createWorkspaceState(): WorkspaceState {
+  return {
+    projectDir: '',
+    projectStatus: null,
+    fileTree: [],
+    openFile: null,
+    openFileContent: '',
+    openFileReadOnly: false,
+    changedFiles: new Set(),
+    openTabs: [],
+    feedbackMessages: [],
+    currentStreaming: '',
+    isStreaming: false,
+    lastSync: null,
+    stepComplete: false,
+    projectComplete: false,
+    diagnostics: [],
+    pendingNavigate: null,
+    snapshots: [],
+    testResult: null,
+    quizData: {},
+    solvedHoles: new Set(),
+    chatMessages: [],
+    isChatStreaming: false,
+    currentChatStreaming: '',
+    showQuickOpen: false,
+    showSearchPanel: false,
+    toasts: [],
+  }
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -188,8 +254,8 @@ export const useStore = create<AppState>((set, get) => ({
   projectDir: '',
   projectStatus: null,
   setProjectDir: (dir) => set({ projectDir: dir }),
-  setProjectStatus: (status) => set({ projectStatus: status }),
-  clearProjectStatus: () => set({ projectStatus: null }),
+  setProjectStatus: (status) => set({ projectStatus: status, projectDir: status.dir }),
+  clearProjectStatus: () => set({ projectStatus: null, projectDir: '' }),
 
   // Files
   fileTree: [],
@@ -267,21 +333,26 @@ export const useStore = create<AppState>((set, get) => ({
   lastSync: null,
   startFeedback: () =>
     set({ isStreaming: true, currentStreaming: '' }),
+  cancelFeedback: () =>
+    set({ isStreaming: false, currentStreaming: '' }),
   addFeedbackChunk: (chunk) =>
-    set((s) => ({ currentStreaming: s.currentStreaming + chunk })),
+    set((s) => s.isStreaming ? { currentStreaming: s.currentStreaming + chunk } : {}),
   endFeedback: () =>
-    set((s) => ({
-      isStreaming: false,
-      feedbackMessages: [
-        ...s.feedbackMessages,
-        {
-          id: Date.now().toString(),
-          content: s.currentStreaming,
-          timestamp: new Date().toISOString(),
-        },
-      ],
-      currentStreaming: '',
-    })),
+    set((s) => {
+      if (!s.isStreaming) return {}
+      return {
+        isStreaming: false,
+        feedbackMessages: [
+          ...s.feedbackMessages,
+          {
+            id: Date.now().toString(),
+            content: s.currentStreaming,
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        currentStreaming: '',
+      }
+    }),
   setLastSync: (time) => set({ lastSync: time }),
 
   // Step complete
@@ -331,16 +402,20 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => ({ chatMessages: [...s.chatMessages, { role: 'user', content }] })),
   startChatStream: () => set({ isChatStreaming: true, currentChatStreaming: '' }),
   addChatChunk: (chunk) =>
-    set((s) => ({ currentChatStreaming: s.currentChatStreaming + chunk })),
+    set((s) => s.isChatStreaming ? { currentChatStreaming: s.currentChatStreaming + chunk } : {}),
+  cancelChatStream: () => set({ isChatStreaming: false, currentChatStreaming: '' }),
   endChatStream: () =>
-    set((s) => ({
-      isChatStreaming: false,
-      chatMessages: [
-        ...s.chatMessages,
-        { role: 'ai' as const, content: s.currentChatStreaming },
-      ],
-      currentChatStreaming: '',
-    })),
+    set((s) => {
+      if (!s.isChatStreaming) return {}
+      return {
+        isChatStreaming: false,
+        chatMessages: [
+          ...s.chatMessages,
+          { role: 'ai' as const, content: s.currentChatStreaming },
+        ],
+        currentChatStreaming: '',
+      }
+    }),
 
   // Quick Open / Search Panel
   showQuickOpen: false,
@@ -366,4 +441,6 @@ export const useStore = create<AppState>((set, get) => ({
   // WebSocket status
   wsStatus: 'disconnected',
   setWsStatus: (s) => set({ wsStatus: s }),
+
+  resetWorkspace: () => set(createWorkspaceState()),
 }))

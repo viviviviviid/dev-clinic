@@ -46,3 +46,27 @@
   flex-shrink: 0;
 }
 .toast-close:hover { color: #e6edf3; }
+.toast-close:focus-visible {
+  outline: 2px solid #58a6ff;
+  outline-offset: 2px;
+}
+
+@media (max-width: 480px) {
+  .toast-container {
+    right: 12px;
+    bottom: 44px;
+    left: 12px;
+  }
+
+  .toast {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}

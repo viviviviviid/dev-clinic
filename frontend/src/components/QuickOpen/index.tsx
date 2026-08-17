@@ -1,21 +1,12 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../store'
-import { supabase } from '../../lib/supabase'
-import { LOCAL } from '../../lib/api'
+import { apiJson } from '../../lib/api'
+import { getErrorMessage } from '../../lib/errors'
 
 interface FileMatch {
   relPath: string
   absPath: string
   name: string
-}
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers: Record<string, string> = {}
-  if (session?.access_token) {
-    headers['Authorization'] = `Bearer ${session.access_token}`
-  }
-  return headers
 }
 
 function highlightMatch(text: string, query: string): React.ReactNode {
@@ -32,9 +23,9 @@ function highlightMatch(text: string, query: string): React.ReactNode {
 }
 
 export default function QuickOpen() {
-  const { setShowQuickOpen, openTabs, addTab, projectStatus } = useStore()
+  const { setShowQuickOpen, openTabs, addTab, addToast, projectStatus } = useStore()
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<FileMatch[]>([])
+  const [searchResults, setSearchResults] = useState<FileMatch[]>([])
   const [selectedIdx, setSelectedIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -46,40 +37,38 @@ export default function QuickOpen() {
   const fetchResults = useCallback(async (q: string) => {
     const dir = projectStatus?.dir
     if (!dir) return
-    const headers = await authHeaders()
     const url = `/api/fs/search/files?q=${encodeURIComponent(q)}&path=${encodeURIComponent(dir)}`
     try {
-      const res = await fetch(url, { headers })
-      const data: FileMatch[] = await res.json()
-      setResults(data)
+      const data = await apiJson<FileMatch[]>(url)
+      setSearchResults(data)
       setSelectedIdx(0)
-    } catch { /* ignore */ }
-  }, [projectStatus?.dir])
+    } catch (error: unknown) {
+      addToast(`파일 검색 실패: ${getErrorMessage(error)}`, 'error')
+    }
+  }, [addToast, projectStatus?.dir])
+
+  const openTabResults = useMemo(() => openTabs.map((tab) => ({
+    relPath: tab.path.split('/').pop() || tab.path,
+    absPath: tab.path,
+    name: tab.path.split('/').pop() || tab.path,
+  })), [openTabs])
+  const results = query ? searchResults : openTabResults
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (!query) {
-      // Show open tabs when query is empty
-      setResults(openTabs.map(t => ({
-        relPath: t.path.split('/').pop() || t.path,
-        absPath: t.path,
-        name: t.path.split('/').pop() || t.path,
-      })))
-      setSelectedIdx(0)
-      return
-    }
+    if (!query) return
     debounceRef.current = setTimeout(() => fetchResults(query), 300)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [query, fetchResults, openTabs])
+  }, [query, fetchResults])
 
   async function openFile(absPath: string) {
-    const headers = await authHeaders()
     try {
-      const res = await fetch(`${LOCAL}/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
-      const data = await res.json()
+      const data = await apiJson<{ content?: string }>(`/api/fs/read?path=${encodeURIComponent(absPath)}`)
       addTab(absPath, data.content || '')
-    } catch { /* ignore */ }
-    setShowQuickOpen(false)
+      setShowQuickOpen(false)
+    } catch (error: unknown) {
+      addToast(`파일 열기 실패: ${getErrorMessage(error)}`, 'error')
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -112,7 +101,10 @@ export default function QuickOpen() {
             className="quick-open-input"
             placeholder="파일명 입력..."
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setSelectedIdx(0)
+            }}
             onKeyDown={handleKeyDown}
           />
         </div>

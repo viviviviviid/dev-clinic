@@ -1,20 +1,25 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/coding-tutor/internal/ai"
 	"github.com/coding-tutor/internal/config"
-	"github.com/coding-tutor/internal/project"
+	"github.com/coding-tutor/internal/pathguard"
 	"github.com/coding-tutor/internal/supabase"
-	"github.com/coding-tutor/internal/watcher"
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,13 +34,23 @@ type DailyMission struct {
 	CreatedAt  time.Time `json:"created_at,omitempty"`
 }
 
+type dailyTopicsCacheEntry struct {
+	topics    []ai.TopicSuggestion
+	expiresAt time.Time
+}
+
+var (
+	dailyTopicsMu    sync.Mutex
+	dailyTopicsCache = make(map[string]dailyTopicsCacheEntry)
+)
+
 func GetDaily(c *gin.Context) {
 	userID := c.GetString("user_id")
 	today := time.Now().Format("2006-01-02")
 
 	var missions []DailyMission
 	err := supabase.Get(
-		fmt.Sprintf("daily_missions?user_id=eq.%s&date=eq.%s&order=created_at.asc&select=*", userID, today),
+		fmt.Sprintf("daily_missions?user_id=eq.%s&date=eq.%s&order=created_at.asc&select=*", supabase.FilterValue(userID), supabase.FilterValue(today)),
 		&missions,
 	)
 	if err != nil {
@@ -49,7 +64,7 @@ func GetDaily(c *gin.Context) {
 	// Always generate topic suggestions so user can add more missions
 	var settings []UserSettings
 	if err := supabase.Get(
-		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID),
+		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", supabase.FilterValue(userID)),
 		&settings,
 	); err != nil || len(settings) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user settings not found"})
@@ -63,7 +78,7 @@ func GetDaily(c *gin.Context) {
 
 	// Fetch all history to avoid repeating past topics
 	var allHistory []DailyMission
-	if err := supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&select=topic", userID), &allHistory); err != nil {
+	if err := supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&limit=100&select=topic", supabase.FilterValue(userID)), &allHistory); err != nil {
 		log.Printf("daily: history fetch error: %v", err)
 	}
 	pastTopics := make([]string, 0, len(allHistory))
@@ -72,10 +87,13 @@ func GetDaily(c *gin.Context) {
 		if !seen[m.Topic] {
 			seen[m.Topic] = true
 			pastTopics = append(pastTopics, m.Topic)
+			if len(pastTopics) == 30 {
+				break
+			}
 		}
 	}
 
-	topics, err := ai.Global.GenerateDailyTopics(c.Request.Context(), settings[0].Language, settings[0].SkillLevel, pastTopics)
+	topics, err := generateDailyTopicsCached(c.Request.Context(), userID, today, settings[0].Language, settings[0].SkillLevel, pastTopics)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -84,15 +102,41 @@ func GetDaily(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"missions": missions, "topics": topics})
 }
 
+func generateDailyTopicsCached(ctx context.Context, userID, date, language, skillLevel string, pastTopics []string) ([]ai.TopicSuggestion, error) {
+	key := strings.Join([]string{userID, date, language, skillLevel, strings.Join(pastTopics, "\x00")}, "\x01")
+	now := time.Now()
+
+	dailyTopicsMu.Lock()
+	defer dailyTopicsMu.Unlock()
+	if cached, ok := dailyTopicsCache[key]; ok && now.Before(cached.expiresAt) {
+		return append([]ai.TopicSuggestion(nil), cached.topics...), nil
+	}
+	if ai.Global == nil {
+		return nil, fmt.Errorf("AI client not initialized")
+	}
+	topics, err := ai.Global.GenerateDailyTopics(ctx, language, skillLevel, pastTopics)
+	if err != nil {
+		return nil, err
+	}
+	dailyTopicsCache = map[string]dailyTopicsCacheEntry{
+		key: {topics: append([]ai.TopicSuggestion(nil), topics...), expiresAt: now.Add(15 * time.Minute)},
+	}
+	return topics, nil
+}
+
 func GetDailyHistory(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	dateFilter := c.Query("date")
 	var query string
 	if dateFilter != "" {
-		query = fmt.Sprintf("daily_missions?user_id=eq.%s&date=eq.%s&order=created_at.asc&select=*", userID, dateFilter)
+		if _, err := time.Parse("2006-01-02", dateFilter); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "date must use YYYY-MM-DD"})
+			return
+		}
+		query = fmt.Sprintf("daily_missions?user_id=eq.%s&date=eq.%s&order=created_at.asc&select=*", supabase.FilterValue(userID), supabase.FilterValue(dateFilter))
 	} else {
-		query = fmt.Sprintf("daily_missions?user_id=eq.%s&order=date.desc,created_at.asc&select=*", userID)
+		query = fmt.Sprintf("daily_missions?user_id=eq.%s&order=date.desc,created_at.asc&select=*", supabase.FilterValue(userID))
 	}
 
 	var missions []DailyMission
@@ -109,115 +153,42 @@ type ConfirmDailyReq struct {
 	Slug  string `json:"slug"`
 }
 
-func ConfirmDaily(c *gin.Context) {
-	userID := c.GetString("user_id")
+var (
+	dailySlugPattern      = regexp.MustCompile(`^[A-Z][A-Za-z0-9]{0,63}$`)
+	dailyDirSuffixPattern = regexp.MustCompile(`^([0-9]{6})-([A-Z][A-Za-z0-9]{0,63})$`)
+)
 
-	var req ConfirmDailyReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+func validateDailyRequest(req *ConfirmDailyReq) error {
+	req.Topic = strings.TrimSpace(req.Topic)
+	req.Slug = strings.TrimSpace(req.Slug)
+	if req.Topic == "" || utf8.RuneCountInString(req.Topic) > 120 {
+		return fmt.Errorf("topic must be between 1 and 120 characters")
 	}
-
-	// Get user settings (language + skill_level only; base_dir from config)
-	var settings []UserSettings
-	if err := supabase.Get(
-		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID),
-		&settings,
-	); err != nil || len(settings) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "user settings not found"})
-		return
+	if strings.IndexFunc(req.Topic, unicode.IsControl) >= 0 {
+		return fmt.Errorf("topic must not contain control characters")
 	}
-	s := settings[0]
-
-	// Calculate project dir: {base_dir}/{YYMMDD}-{Slug}
-	dateStr := time.Now().Format("060102")
-	projectDir := filepath.Join(config.Global.BaseDir, fmt.Sprintf("%s-%s", dateStr, req.Slug))
-
-	if err := os.MkdirAll(projectDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	if !dailySlugPattern.MatchString(req.Slug) {
+		return fmt.Errorf("slug must be a PascalCase identifier of at most 64 characters")
 	}
+	return nil
+}
 
-	if ai.Global == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI client not initialized"})
-		return
+func buildRequiredNewbieQuizFile(
+	quizData map[string]ai.QuizItem,
+	generationErr error,
+	marshalJSON func(interface{}) ([]byte, error),
+) (string, error) {
+	if generationErr != nil {
+		return "", fmt.Errorf("generate quiz: %w", generationErr)
 	}
-
-	// Generate curriculum
-	curriculum, err := ai.Global.GenerateCurriculum(c.Request.Context(), s.Language, req.Topic, s.SkillLevel)
+	if len(quizData) == 0 {
+		return "", fmt.Errorf("generated quiz is empty")
+	}
+	quizBytes, err := marshalJSON(quizData)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+		return "", fmt.Errorf("encode quiz: %w", err)
 	}
-
-	// Write TUTORSYS.md
-	if err := os.WriteFile(filepath.Join(projectDir, "TUTORSYS.md"), []byte(curriculum), 0644); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Generate code files
-	files, err := ai.Global.GenerateCodeFiles(c.Request.Context(), curriculum, nil)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	created := []string{}
-	for name, content := range files {
-		path := filepath.Join(projectDir, name)
-		os.MkdirAll(filepath.Dir(path), 0755)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		created = append(created, name)
-	}
-
-	// Run go mod init/tidy for Go projects (non-fatal)
-	if s.Language == "go" {
-		if merr := ensureGoMod(projectDir); merr != nil {
-			fmt.Printf("go mod: %v\n", merr)
-		}
-	}
-
-	// Generate quiz for newbie
-	if s.SkillLevel == "newbie" {
-		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), curriculum, files)
-		if err == nil && len(quizData) > 0 {
-			if quizBytes, err := json.Marshal(quizData); err == nil {
-				os.WriteFile(filepath.Join(projectDir, "quiz.json"), quizBytes, 0644)
-			}
-		}
-	}
-
-	// Load project and start watcher
-	project.Global.Set(projectDir, curriculum)
-	if ai.Global != nil {
-		ai.Global.SetToken(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
-	}
-	if err := watcher.Start(projectDir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
-		return
-	}
-
-	// Insert daily mission to Supabase (non-fatal)
-	today := time.Now().Format("2006-01-02")
-	mission := DailyMission{
-		UserID:     userID,
-		Date:       today,
-		Topic:      req.Topic,
-		Slug:       req.Slug,
-		ProjectDir: projectDir,
-		Status:     "active",
-	}
-	supabase.Insert("daily_missions", mission)
-
-	c.JSON(http.StatusOK, gin.H{
-		"ok":          true,
-		"project_dir": projectDir,
-		"files":       created,
-	})
+	return string(quizBytes), nil
 }
 
 func ConfirmDailyStream(c *gin.Context) {
@@ -225,6 +196,10 @@ func ConfirmDailyStream(c *gin.Context) {
 
 	var req ConfirmDailyReq
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateDailyRequest(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -255,7 +230,7 @@ func ConfirmDailyStream(c *gin.Context) {
 
 	var settings []UserSettings
 	if err := supabase.Get(
-		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID),
+		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", supabase.FilterValue(userID)),
 		&settings,
 	); err != nil || len(settings) == 0 {
 		sendError("사용자 설정을 찾을 수 없습니다")
@@ -291,27 +266,19 @@ func ConfirmDailyStream(c *gin.Context) {
 
 	if s.SkillLevel == "newbie" {
 		sendProgress("quiz", "퀴즈 데이터를 생성하고 있습니다...")
-		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), curriculum, files)
-		if err == nil && len(quizData) > 0 {
-			if quizBytes, err := json.Marshal(quizData); err == nil {
-				allFiles["quiz.json"] = string(quizBytes)
-			}
+		quizData, generationErr := ai.Global.GenerateQuizData(c.Request.Context(), curriculum, files)
+		quizFile, err := buildRequiredNewbieQuizFile(quizData, generationErr, json.Marshal)
+		if err != nil {
+			sendError("퀴즈 생성 실패: " + err.Error())
+			return
 		}
+		allFiles["quiz.json"] = quizFile
 	}
 
-	// Insert Supabase record — project_dir stores dir_suffix (local server prepends BaseDir)
+	// The browser must first persist these files through /api/project/setup. Only
+	// then does it call /api/daily/finalize to create the active mission row.
 	dateStr := time.Now().Format("060102")
 	dirSuffix := dateStr + "-" + req.Slug
-	today := time.Now().Format("2006-01-02")
-	mission := DailyMission{
-		UserID:     userID,
-		Date:       today,
-		Topic:      req.Topic,
-		Slug:       req.Slug,
-		ProjectDir: dirSuffix,
-		Status:     "active",
-	}
-	supabase.Insert("daily_missions", mission)
 
 	doneData, _ := json.Marshal(map[string]interface{}{
 		"dir_suffix":  dirSuffix,
@@ -324,10 +291,194 @@ func ConfirmDailyStream(c *gin.Context) {
 	flusher.Flush()
 }
 
+type FinalizeDailyReq struct {
+	Topic     string `json:"topic"`
+	Slug      string `json:"slug"`
+	DirSuffix string `json:"dir_suffix"`
+}
+
+func validateFinalizeDailyRequest(req *FinalizeDailyReq) (string, error) {
+	return validateFinalizeDailyRequestAt(req, time.Now())
+}
+
+func validateFinalizeDailyRequestAt(req *FinalizeDailyReq, now time.Time) (string, error) {
+	dailyReq := ConfirmDailyReq{Topic: req.Topic, Slug: req.Slug}
+	if err := validateDailyRequest(&dailyReq); err != nil {
+		return "", err
+	}
+	req.Topic = dailyReq.Topic
+	req.Slug = dailyReq.Slug
+
+	if req.DirSuffix != strings.TrimSpace(req.DirSuffix) {
+		return "", fmt.Errorf("dir_suffix must not contain surrounding whitespace")
+	}
+	matches := dailyDirSuffixPattern.FindStringSubmatch(req.DirSuffix)
+	if len(matches) != 3 || matches[2] != req.Slug {
+		return "", fmt.Errorf("dir_suffix must use YYMMDD-<slug> and match slug")
+	}
+
+	prefix := matches[1]
+	localNow := now.In(time.Local)
+	missionDate := localNow
+	switch prefix {
+	case localNow.Format("060102"):
+	case localNow.AddDate(0, 0, -1).Format("060102"):
+		missionDate = localNow.AddDate(0, 0, -1)
+	default:
+		return "", fmt.Errorf("dir_suffix date must be server-local today or yesterday")
+	}
+	return missionDate.Format("2006-01-02"), nil
+}
+
+func getDailyMissionsByProjectDir(userID, dirSuffix string) ([]DailyMission, error) {
+	var missions []DailyMission
+	path := fmt.Sprintf(
+		"daily_missions?user_id=eq.%s&project_dir=eq.%s&select=*",
+		supabase.FilterValue(userID),
+		supabase.FilterValue(dirSuffix),
+	)
+	if err := supabase.Get(path, &missions); err != nil {
+		return nil, err
+	}
+	return missions, nil
+}
+
+func verifyFinalizedProjectSetup(dirSuffix string) error {
+	projectDir, err := pathguard.ResolveRelative(config.Global.BaseDir, dirSuffix)
+	if err != nil {
+		return fmt.Errorf("resolve project directory: %w", err)
+	}
+	projectInfo, err := os.Lstat(projectDir)
+	if err != nil {
+		return fmt.Errorf("stat project directory: %w", err)
+	}
+	if !projectInfo.IsDir() {
+		return fmt.Errorf("project path is not a directory")
+	}
+
+	tutorPath := filepath.Join(projectDir, "TUTORSYS.md")
+	tutorInfo, err := os.Lstat(tutorPath)
+	if err != nil {
+		return fmt.Errorf("stat TUTORSYS.md: %w", err)
+	}
+	if !tutorInfo.Mode().IsRegular() {
+		return fmt.Errorf("TUTORSYS.md is not a regular file")
+	}
+	return nil
+}
+
+func finalizedMissionState(missions []DailyMission, req FinalizeDailyReq, missionDate string) (idempotent, conflict bool) {
+	if len(missions) == 0 {
+		return false, false
+	}
+	if len(missions) != 1 {
+		return false, true
+	}
+	mission := missions[0]
+	if mission.Status != "active" ||
+		mission.Date != missionDate ||
+		mission.Topic != req.Topic ||
+		mission.Slug != req.Slug ||
+		mission.ProjectDir != req.DirSuffix {
+		return false, true
+	}
+	return true, false
+}
+
+// FinalizeDailyMission records a mission only after local project setup has
+// succeeded. A unique (user_id, project_dir) index makes concurrent retries
+// safe; regular INSERT is intentional so completed rows are never reactivated.
+func FinalizeDailyMission(c *gin.Context) {
+	userID := strings.TrimSpace(c.GetString("user_id"))
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authenticated user required"})
+		return
+	}
+
+	var req FinalizeDailyReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid finalize request"})
+		return
+	}
+	missionDate, err := validateFinalizeDailyRequest(&req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := verifyFinalizedProjectSetup(req.DirSuffix); err != nil {
+		log.Printf("daily finalize: local setup is incomplete: %v", err)
+		c.JSON(http.StatusConflict, gin.H{"error": "로컬 프로젝트 설정이 완료되지 않았습니다"})
+		return
+	}
+	existing, err := getDailyMissionsByProjectDir(userID, req.DirSuffix)
+	if err != nil {
+		log.Printf("daily finalize: lookup failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "학습 기록을 확인하지 못했습니다"})
+		return
+	}
+	if idempotent, conflict := finalizedMissionState(existing, req, missionDate); idempotent {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "created": false})
+		return
+	} else if conflict {
+		c.JSON(http.StatusConflict, gin.H{"error": "같은 프로젝트 경로의 학습 기록이 이미 존재합니다"})
+		return
+	}
+	mission := DailyMission{
+		UserID:     userID,
+		Date:       missionDate,
+		Topic:      req.Topic,
+		Slug:       req.Slug,
+		ProjectDir: req.DirSuffix,
+		Status:     "active",
+	}
+	if err := supabase.Insert("daily_missions", mission); err == nil {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "created": true})
+		return
+	} else {
+		// A concurrent identical finalize can win the unique-index race or the
+		// response can be lost after commit. Re-read once before reporting failure.
+		log.Printf("daily finalize: insert failed, checking retry state: %v", err)
+		existing, lookupErr := getDailyMissionsByProjectDir(userID, req.DirSuffix)
+		if lookupErr == nil {
+			if idempotent, conflict := finalizedMissionState(existing, req, missionDate); idempotent {
+				c.JSON(http.StatusOK, gin.H{"ok": true, "created": false})
+				return
+			} else if conflict {
+				c.JSON(http.StatusConflict, gin.H{"error": "같은 프로젝트 경로의 학습 기록이 이미 존재합니다"})
+				return
+			}
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "학습 기록 확정에 실패했습니다"})
+	}
+}
+
 type NurseChatReq struct {
 	Message    string                `json:"message"`
 	History    []ai.NurseChatMessage `json:"history"`
 	PastTopics []string              `json:"pastTopics"`
+}
+
+func writeSSEEvent(w io.Writer, event string, data interface{}) error {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, payload)
+	return err
+}
+
+func writeNurseReplyEvents(w io.Writer, reply ai.NurseReply) error {
+	if err := writeSSEEvent(w, "message", map[string]string{"text": reply.Message}); err != nil {
+		return err
+	}
+	topics := reply.Topics
+	if topics == nil {
+		topics = []ai.TopicSuggestion{}
+	}
+	if err := writeSSEEvent(w, "topics", map[string][]ai.TopicSuggestion{"topics": topics}); err != nil {
+		return err
+	}
+	return writeSSEEvent(w, "done", struct{}{})
 }
 
 // NurseChatHandler streams nurse chat responses.
@@ -340,6 +491,17 @@ func NurseChatHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Message == "" || utf8.RuneCountInString(req.Message) > 4000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "message must be between 1 and 4000 characters"})
+		return
+	}
+	if len(req.History) > 20 {
+		req.History = req.History[len(req.History)-20:]
+	}
+	if len(req.PastTopics) > 50 {
+		req.PastTopics = req.PastTopics[:50]
+	}
 
 	if ai.Global == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI not initialized"})
@@ -348,7 +510,7 @@ func NurseChatHandler(c *gin.Context) {
 
 	var settings []UserSettings
 	if err := supabase.Get(
-		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", userID),
+		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", supabase.FilterValue(userID)),
 		&settings,
 	); err != nil || len(settings) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user settings not found"})
@@ -358,7 +520,7 @@ func NurseChatHandler(c *gin.Context) {
 	// If caller didn't supply past topics, fetch from DB
 	if len(req.PastTopics) == 0 {
 		var allHistory []DailyMission
-		if err := supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&select=topic", userID), &allHistory); err != nil {
+		if err := supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&limit=100&select=topic", supabase.FilterValue(userID)), &allHistory); err != nil {
 			log.Printf("daily: nurse-chat history fetch error: %v", err)
 		}
 		seen := map[string]bool{}
@@ -366,6 +528,9 @@ func NurseChatHandler(c *gin.Context) {
 			if !seen[m.Topic] {
 				seen[m.Topic] = true
 				req.PastTopics = append(req.PastTopics, m.Topic)
+				if len(req.PastTopics) == 30 {
+					break
+				}
 			}
 		}
 	}
@@ -381,22 +546,18 @@ func NurseChatHandler(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	sendChunk := func(text string) {
-		data, _ := json.Marshal(map[string]string{"text": text})
-		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-
-	err := ai.Global.NurseChat(
+	reply, err := ai.Global.GenerateNurseReply(
 		c.Request.Context(),
 		req.Message, req.History, req.PastTopics,
 		settings[0].Language, settings[0].SkillLevel,
-		func(chunk string) { sendChunk(chunk) },
 	)
 	if err != nil {
-		sendChunk("죄송해요, 지금은 대화가 어려워요: " + err.Error())
+		log.Printf("daily: nurse reply failed: %v", err)
+		reply = ai.NurseReply{Message: "죄송해요, 지금은 대화가 어려워요. 잠시 후 다시 시도해 주세요.", Topics: []ai.TopicSuggestion{}}
 	}
-
-	fmt.Fprintf(c.Writer, "event: done\ndata: {}\n\n")
+	if err := writeNurseReplyEvents(c.Writer, reply); err != nil {
+		log.Printf("daily: nurse SSE write failed: %v", err)
+		return
+	}
 	flusher.Flush()
 }

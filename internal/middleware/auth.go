@@ -5,10 +5,13 @@ import (
 	"crypto/elliptic"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +25,7 @@ type jwkKey struct {
 	Kty string `json:"kty"`
 	Kid string `json:"kid"`
 	Alg string `json:"alg"`
+	Crv string `json:"crv"`
 	X   string `json:"x"`
 	Y   string `json:"y"`
 }
@@ -31,29 +35,47 @@ type jwksResponse struct {
 }
 
 var (
-	cachedKeys   []jwkKey
-	cachedKeysAt time.Time
-	keysMu       sync.RWMutex
+	cachedKeys    []jwkKey
+	cachedKeysAt  time.Time
+	cachedKeysURL string
+	keysMu        sync.RWMutex
 )
 
+const maxJWKSResponseBytes = 1 << 20
+
+var jwksHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 func fetchJWKS() ([]jwkKey, error) {
-	url := config.Global.Supabase.URL + "/auth/v1/.well-known/jwks.json"
-	resp, err := http.Get(url)
+	baseURL := strings.TrimRight(strings.TrimSpace(config.Global.Supabase.URL), "/")
+	if baseURL == "" {
+		return nil, errors.New("supabase URL is not configured")
+	}
+	url := baseURL + "/auth/v1/.well-known/jwks.json"
+	resp, err := jwksHTTPClient.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("jwks endpoint returned %s", resp.Status)
+	}
 	var jwks jwksResponse
-	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+	reader := io.LimitReader(resp.Body, maxJWKSResponseBytes+1)
+	decoder := json.NewDecoder(reader)
+	if err := decoder.Decode(&jwks); err != nil {
 		return nil, err
+	}
+	if len(jwks.Keys) == 0 {
+		return nil, errors.New("jwks endpoint returned no keys")
 	}
 	return jwks.Keys, nil
 }
 
 func getJWKS() ([]jwkKey, error) {
+	keysURL := strings.TrimRight(strings.TrimSpace(config.Global.Supabase.URL), "/")
 	keysMu.RLock()
-	if len(cachedKeys) > 0 && time.Since(cachedKeysAt) < time.Hour {
-		keys := cachedKeys
+	if len(cachedKeys) > 0 && cachedKeysURL == keysURL && time.Since(cachedKeysAt) < time.Hour {
+		keys := append([]jwkKey(nil), cachedKeys...)
 		keysMu.RUnlock()
 		return keys, nil
 	}
@@ -64,8 +86,9 @@ func getJWKS() ([]jwkKey, error) {
 		return nil, err
 	}
 	keysMu.Lock()
-	cachedKeys = keys
+	cachedKeys = append([]jwkKey(nil), keys...)
 	cachedKeysAt = time.Now()
+	cachedKeysURL = keysURL
 	keysMu.Unlock()
 	return keys, nil
 }
@@ -84,6 +107,9 @@ func jwtKeyFunc(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected method for HS256")
 		}
+		if strings.TrimSpace(config.Global.Supabase.JWTSecret) == "" {
+			return nil, errors.New("supabase JWT secret is not configured")
+		}
 		return []byte(config.Global.Supabase.JWTSecret), nil
 
 	case "ES256":
@@ -95,7 +121,7 @@ func jwtKeyFunc(token *jwt.Token) (interface{}, error) {
 			return nil, fmt.Errorf("jwks fetch error: %w", err)
 		}
 		for _, k := range keys {
-			if k.Kid == kid {
+			if k.Kid == kid && k.Kty == "EC" && k.Alg == "ES256" && k.Crv == "P-256" {
 				xBytes, err := base64.RawURLEncoding.DecodeString(k.X)
 				if err != nil {
 					continue
@@ -104,11 +130,13 @@ func jwtKeyFunc(token *jwt.Token) (interface{}, error) {
 				if err != nil {
 					continue
 				}
-				return &ecdsa.PublicKey{
-					Curve: elliptic.P256(),
-					X:     new(big.Int).SetBytes(xBytes),
-					Y:     new(big.Int).SetBytes(yBytes),
-				}, nil
+				curve := elliptic.P256()
+				x := new(big.Int).SetBytes(xBytes)
+				y := new(big.Int).SetBytes(yBytes)
+				if !curve.IsOnCurve(x, y) {
+					continue
+				}
+				return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
 			}
 		}
 		return nil, fmt.Errorf("no matching JWKS key for kid=%s", kid)
@@ -116,6 +144,53 @@ func jwtKeyFunc(token *jwt.Token) (interface{}, error) {
 	default:
 		return nil, fmt.Errorf("unsupported alg: %s", alg)
 	}
+}
+
+// ValidateToken verifies a Supabase access token and returns its subject.
+// Both HTTP middleware and WebSocket handshakes use this function so that the
+// local backend has one authentication policy.
+func ValidateToken(tokenString string) (string, error) {
+	tokenString = strings.TrimSpace(tokenString)
+	if tokenString == "" {
+		return "", errors.New("token is empty")
+	}
+
+	claims := jwt.MapClaims{}
+	parser := jwt.NewParser(
+		jwt.WithValidMethods([]string{"HS256", "ES256"}),
+		jwt.WithJSONNumber(),
+	)
+	token, err := parser.ParseWithClaims(tokenString, claims, jwtKeyFunc)
+	if err != nil || token == nil || !token.Valid {
+		if err == nil {
+			err = errors.New("token is invalid")
+		}
+		return "", err
+	}
+
+	expectedIssuer := strings.TrimRight(strings.TrimSpace(config.Global.Supabase.URL), "/") + "/auth/v1"
+	if expectedIssuer == "/auth/v1" || !claims.VerifyIssuer(expectedIssuer, true) {
+		return "", errors.New("invalid token issuer")
+	}
+	if !claims.VerifyAudience("authenticated", true) {
+		return "", errors.New("invalid token audience")
+	}
+	role, ok := claims["role"].(string)
+	if !ok || role != "authenticated" {
+		return "", errors.New("invalid token role")
+	}
+	if _, ok := claims["exp"]; !ok || !claims.VerifyExpiresAt(time.Now().Unix(), true) {
+		return "", errors.New("token is expired or missing expiration")
+	}
+	userID, ok := claims["sub"].(string)
+	if !ok || strings.TrimSpace(userID) == "" {
+		return "", errors.New("missing token subject")
+	}
+	if allowedUserID := strings.TrimSpace(os.Getenv("ALLOWED_USER_ID")); allowedUserID != "" && userID != allowedUserID {
+		return "", errors.New("token subject is not allowed")
+	}
+
+	return userID, nil
 }
 
 func Auth() gin.HandlerFunc {
@@ -126,23 +201,11 @@ func Auth() gin.HandlerFunc {
 			return
 		}
 
-		tokenStr := strings.TrimPrefix(header, "Bearer ")
-		token, err := jwt.Parse(tokenStr, jwtKeyFunc)
-		if err != nil || !token.Valid {
+		tokenStr := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+		userID, err := ValidateToken(tokenStr)
+		if err != nil {
 			log.Printf("auth: JWT error: %v", err)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-			return
-		}
-
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid claims"})
-			return
-		}
-
-		userID, ok := claims["sub"].(string)
-		if !ok || userID == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing user id"})
 			return
 		}
 

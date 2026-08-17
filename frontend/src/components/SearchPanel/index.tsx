@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useStore } from '../../store'
-import { supabase } from '../../lib/supabase'
-import { LOCAL } from '../../lib/api'
+import { apiJson } from '../../lib/api'
+import { getErrorMessage } from '../../lib/errors'
 
 interface ContentMatch {
   relPath: string
@@ -15,15 +15,6 @@ interface GroupedResult {
   relPath: string
   absPath: string
   matches: ContentMatch[]
-}
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const { data: { session } } = await supabase.auth.getSession()
-  const headers: Record<string, string> = {}
-  if (session?.access_token) {
-    headers['Authorization'] = `Bearer ${session.access_token}`
-  }
-  return headers
 }
 
 function groupResults(matches: ContentMatch[]): GroupedResult[] {
@@ -49,7 +40,7 @@ function highlightLine(line: string, query: string, colStart: number): React.Rea
 }
 
 export default function SearchPanel() {
-  const { setShowSearchPanel, addTab, setPendingNavigate, projectStatus } = useStore()
+  const { setShowSearchPanel, addTab, addToast, setPendingNavigate, projectStatus } = useStore()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<GroupedResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -68,16 +59,16 @@ export default function SearchPanel() {
       return
     }
     setLoading(true)
-    const headers = await authHeaders()
     try {
-      const url = `/api/fs/search/content?q=${encodeURIComponent(q)}&path=${encodeURIComponent(dir)}`
-      const res = await fetch(url, { headers })
-      const data: ContentMatch[] = await res.json()
+      const path = `/api/fs/search/content?q=${encodeURIComponent(q)}&path=${encodeURIComponent(dir)}`
+      const data = await apiJson<ContentMatch[]>(path)
       setResults(groupResults(data))
-    } catch { /* ignore */ } finally {
+    } catch (error: unknown) {
+      addToast(`프로젝트 검색 실패: ${getErrorMessage(error)}`, 'error')
+    } finally {
       setLoading(false)
     }
-  }, [projectStatus?.dir])
+  }, [addToast, projectStatus?.dir])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -90,13 +81,13 @@ export default function SearchPanel() {
   }, [query, fetchResults])
 
   async function openResult(absPath: string, lineNum: number) {
-    const headers = await authHeaders()
     try {
-      const res = await fetch(`${LOCAL}/api/fs/read?path=${encodeURIComponent(absPath)}`, { headers })
-      const data = await res.json()
+      const data = await apiJson<{ content?: string }>(`/api/fs/read?path=${encodeURIComponent(absPath)}`)
       addTab(absPath, data.content || '')
       setPendingNavigate({ path: absPath, line: lineNum, column: 1 })
-    } catch { /* ignore */ }
+    } catch (error: unknown) {
+      addToast(`파일 열기 실패: ${getErrorMessage(error)}`, 'error')
+    }
   }
 
   function toggleCollapse(absPath: string) {

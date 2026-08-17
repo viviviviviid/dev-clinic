@@ -1,28 +1,33 @@
-.PHONY: dev dev-be dev-fe build-fe build build-homeserver dev-homeserver
+.PHONY: dev dev-be dev-fe test lint build-fe build-be build
 
 DIR ?= .
 
 dev-be:
-	go run ./cmd/clinic/main.go $(DIR)
+	go run ./cmd/clinic $(DIR)
 
 dev-fe:
 	cd frontend && npm run dev
 
-dev-homeserver:
-	go run ./cmd/homeserver/main.go
-
 build-fe:
 	cd frontend && npm run build
 
-build: build-fe
-	go build -o bin/clinic ./cmd/clinic/main.go
+build-be:
+	mkdir -p bin
+	go build -o bin/clinic ./cmd/clinic
 
-build-homeserver: build-fe
-	go build -o bin/coding-tutor-server ./cmd/homeserver/main.go
+build: build-fe build-be
+
+test:
+	go test ./cmd/... ./internal/...
+	npm --prefix frontend test
+
+lint:
+	go vet ./cmd/... ./internal/...
+	cd frontend && npm run lint
 
 dev:
 	@echo "Starting local server on :47291 and frontend on :5173"
-	@trap 'kill %1 %2 2>/dev/null; exit' INT; \
-	go run ./cmd/clinic/main.go $(DIR) & \
-	cd frontend && npm run dev & \
-	wait
+	@go run ./cmd/clinic $(DIR) & clinic_pid=$$!; \
+	(cd frontend && npm run dev) & frontend_pid=$$!; \
+	trap 'kill $$clinic_pid $$frontend_pid 2>/dev/null; wait $$clinic_pid $$frontend_pid 2>/dev/null' EXIT INT TERM; \
+	wait $$clinic_pid $$frontend_pid

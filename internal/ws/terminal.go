@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"syscall"
 
+	"github.com/coding-tutor/internal/config"
+	"github.com/coding-tutor/internal/pathguard"
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 )
@@ -17,17 +20,23 @@ type resizeMsg struct {
 }
 
 func ServeTerminal(w http.ResponseWriter, r *http.Request) {
-	dir := r.URL.Query().Get("dir")
-	if dir == "" {
-		dir = os.Getenv("HOME")
+	requestedDir := r.URL.Query().Get("dir")
+	if requestedDir == "" {
+		requestedDir = config.Global.BaseDir
+	}
+	dir, err := pathguard.Resolve(config.Global.BaseDir, requestedDir)
+	if err != nil {
+		http.Error(w, "invalid terminal directory", http.StatusForbidden)
+		return
 	}
 	log.Printf("terminal: new session dir=%s", dir)
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, _, err := Upgrade(w, r)
 	if err != nil {
 		log.Printf("terminal: ws upgrade failed: %v", err)
 		return
 	}
+	conn.SetReadLimit(1 << 20)
 	defer conn.Close()
 
 	shell := os.Getenv("SHELL")
@@ -37,7 +46,7 @@ func ServeTerminal(w http.ResponseWriter, r *http.Request) {
 	log.Printf("terminal: starting shell=%s", shell)
 
 	cmd := exec.Command(shell)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = append(SanitizedEnv(os.Environ()), "TERM=xterm-256color")
 	cmd.Dir = dir
 
 	ptmx, err := pty.Start(cmd)
@@ -49,7 +58,10 @@ func ServeTerminal(w http.ResponseWriter, r *http.Request) {
 	log.Printf("terminal: pty started")
 	defer func() {
 		ptmx.Close()
-		cmd.Process.Kill()
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Process.Kill()
+		}
 	}()
 
 	// PTY → WebSocket

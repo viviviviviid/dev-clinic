@@ -163,7 +163,11 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
             key={key}
             className={`quiz-glyph-btn${isBug ? ' bug' : ' hole'}${isLocked ? ' locked' : ''}${isOpen ? ' open' : ''}`}
             style={{ top: viewTop }}
-            onClick={() => { if (!isLocked) { isOpen ? closeHint(key) : openHint(key, lineNumber) } }}
+            onClick={() => {
+              if (isLocked) return
+              if (isOpen) closeHint(key)
+              else openHint(key, lineNumber)
+            }}
             title={isLocked ? '앞 HOLE을 먼저 해결하세요' : (isOpen ? '닫기' : '열기')}
           />
         )
@@ -177,7 +181,6 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
         return (
           <HintCard
             key={key}
-            quizKey={key}
             item={item}
             top={zone.docTop - scrollTop}
             hints={hints}
@@ -197,7 +200,6 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
 
 // ── 힌트 카드 ─────────────────────────────────────────
 interface HintCardProps {
-  quizKey: string
   item: QuizItem
   top: number
   hints: string[]
@@ -211,7 +213,7 @@ interface HintCardProps {
 }
 
 function HintCard({
-  quizKey: _quizKey, item, top, hints, hintLevel,
+  item, top, hints, hintLevel,
   writeInput, onWriteInputChange, onSubmit,
   onRevealHint, onClose, onHeightChange,
 }: HintCardProps) {
