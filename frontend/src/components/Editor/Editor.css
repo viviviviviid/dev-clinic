@@ -99,6 +99,67 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  padding-right: 6px;
+  max-width: 78%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.editor-tab-actions::-webkit-scrollbar { display: none; }
+
+.review-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid #8957e5;
+  border-radius: 5px;
+  background: #2a1645;
+  color: #d2a8ff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.review-btn:hover:not(:disabled) {
+  background: #3b1f60;
+  border-color: #a371f7;
+}
+
+.review-btn.review-ready {
+  border-color: #d29922;
+  color: #f2cc60;
+  background: #2d240c;
+}
+
+.review-btn.review-requesting,
+.review-btn.review-reviewing {
+  border-color: #58a6ff;
+  color: #79c0ff;
+  background: #0d2f5e;
+}
+
+.review-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.review-btn:focus-visible,
+.run-btn:focus-visible,
+.concept-btn:focus-visible,
+.run-output-toggle:focus-visible,
+.tab-close-btn:focus-visible {
+  outline: 2px solid #79c0ff;
+  outline-offset: 2px;
+}
+
+.review-ready-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f2cc60;
+  box-shadow: 0 0 0 2px rgba(242, 204, 96, 0.18);
 }
 
 /* 실행 버튼 */
@@ -517,6 +578,14 @@
 .quiz-glyph-btn.locked { background: #30363d; cursor: default; opacity: 0.4; }
 .quiz-glyph-btn.open  { opacity: 1; box-shadow: 0 0 0 2px rgba(255,255,255,0.2); }
 
+.quiz-glyph-btn:focus-visible,
+.quiz-content-close:focus-visible,
+.write-submit-btn:focus-visible,
+.hint-reveal-btn:focus-visible {
+  outline: 2px solid #58a6ff;
+  outline-offset: 2px;
+}
+
 /* 퀴즈 콘텐츠 카드 */
 .quiz-content {
   position: absolute;
@@ -854,6 +923,15 @@
 
 .write-textarea:focus { border-color: #58a6ff; }
 
+.write-textarea[aria-invalid="true"] {
+  border-color: #f85149;
+}
+
+.write-textarea:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .write-textarea.write-error-input {
   border-color: #f85149;
   animation: writeErrorFlash 0.5s ease;
@@ -885,6 +963,27 @@
 
 .write-submit-btn:hover:not(:disabled) { opacity: 0.85; }
 .write-submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.quiz-verification-note,
+.quiz-submit-error {
+  margin: 7px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.quiz-verification-note {
+  border: 1px solid rgba(88, 166, 255, 0.2);
+  background: rgba(88, 166, 255, 0.07);
+  color: #8b949e;
+}
+
+.quiz-submit-error {
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  background: rgba(248, 81, 73, 0.09);
+  color: #ff7b72;
+}
 
 /* ── Nurse explanation VN overlay ── */
 .nurse-explanation-overlay {

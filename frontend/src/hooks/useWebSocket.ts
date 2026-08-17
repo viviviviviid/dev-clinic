@@ -1,8 +1,19 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
-import { WS_BASE } from '../lib/api'
+import { apiJson, WS_BASE } from '../lib/api'
 import { supabase } from '../lib/supabase'
-import { shouldApplyWebSocketMessage } from './webSocketProject'
+import {
+  applyReviewSnapshot,
+  currentReviewSnapshot,
+  type ReviewSnapshot,
+} from './useProject'
+import { reviewSessionDecision } from './reviewSnapshot'
+import {
+  applyReviewCancellation,
+  applySyncStatus,
+  shouldApplyReviewEvent,
+  shouldApplyWebSocketMessage,
+} from './webSocketProject'
 
 interface WSMessage {
   type: string
@@ -12,12 +23,33 @@ interface WSMessage {
   error?: string
   passed?: boolean
   summary?: string
+  test_scope?: 'full' | 'targeted'
+  test_input_hash?: string
   project_dir?: string
+  revision?: number
+  semantic_hash?: string
+  files?: string[]
+  reason?: string
+  status?: 'idle' | 'ready' | 'reviewing'
+  session_id?: number
+  request_id?: string
 }
+
+const REVIEW_EVENT_TYPES = new Set([
+  'review_ready',
+  'review_started',
+  'review_cancelled',
+  'review_end',
+  'review_error',
+  'feedback_start',
+  'feedback_chunk',
+  'feedback_end',
+])
 
 export function useWebSocket(enabled = true, retryKey = 0) {
   const ws = useRef<WebSocket | null>(null)
   const projectDir = useStore((state) => state.projectStatus?.dir ?? state.projectDir)
+  const projectSessionEpoch = useStore((state) => state.projectSessionEpoch)
 
   useEffect(() => {
     if (!enabled) {
@@ -28,6 +60,7 @@ export function useWebSocket(enabled = true, retryKey = 0) {
     let destroyed = false
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
     const connectionProjectDir = projectDir
+    const connectionSessionEpoch = projectSessionEpoch
 
     function scheduleReconnect() {
       if (destroyed) return
@@ -69,44 +102,112 @@ export function useWebSocket(enabled = true, retryKey = 0) {
           return
         }
         const currentProjectDir = useStore.getState().projectStatus?.dir ?? useStore.getState().projectDir
-        if (currentProjectDir !== connectionProjectDir) {
+        if (currentProjectDir !== connectionProjectDir ||
+            useStore.getState().projectSessionEpoch !== connectionSessionEpoch) {
           sock.close()
           return
         }
         useStore.getState().setWsStatus('connected')
+        const expected = currentReviewSnapshot()
+        void apiJson<ReviewSnapshot>('/api/review/status?refresh=1').then((snapshot) => {
+          if (destroyed || ws.current !== sock ||
+              useStore.getState().projectSessionEpoch !== connectionSessionEpoch) return
+          applyReviewSnapshot(snapshot, 'status', expected)
+        }).catch(() => {
+          // Lobby connections have no active project; the next project-scoped
+          // socket reconnect will reconcile review state and missed feedback.
+        })
       }
 
       sock.onmessage = (evt) => {
         if (destroyed || ws.current !== sock) return
         try {
           const msg: WSMessage = JSON.parse(evt.data)
-          const store = useStore.getState()
+          let store = useStore.getState()
           const currentProjectDir = store.projectStatus?.dir ?? store.projectDir
-          if (!shouldApplyWebSocketMessage(msg.project_dir, connectionProjectDir, currentProjectDir)) {
+          if (!shouldApplyWebSocketMessage(
+            msg.project_dir,
+            connectionProjectDir,
+            currentProjectDir,
+            connectionSessionEpoch,
+            store.projectSessionEpoch,
+          )) {
             return
           }
+          if (msg.project_dir) {
+            const sessionDecision = reviewSessionDecision(msg.session_id, store.reviewServerSessionID)
+            if (sessionDecision === 'reject') return
+            if (sessionDecision === 'adopt' && msg.session_id !== undefined) {
+              store.adoptReviewServerSession(msg.session_id)
+              store = useStore.getState()
+            }
+          }
+          if (REVIEW_EVENT_TYPES.has(msg.type) && !shouldApplyReviewEvent(
+            msg.type,
+            msg.revision,
+            store.reviewRevision,
+            store.activeReviewRevision,
+            msg.request_id,
+            store.reviewRequestID,
+            store.reviewStatus,
+          )) return
+
+          const reviewTestStatus = store.testResult
+            ? store.testResult.passed ? 'passed' as const : 'failed' as const
+            : 'not_run' as const
           switch (msg.type) {
+            case 'review_ready':
+              store.markReviewReady(
+                msg.revision ?? store.reviewRevision,
+                msg.semantic_hash,
+                msg.files,
+                reviewTestStatus,
+                msg.request_id,
+              )
+              break
+            case 'review_started':
+              store.startFeedback(
+                msg.revision,
+                msg.semantic_hash,
+                msg.files,
+                reviewTestStatus,
+                msg.request_id,
+              )
+              break
+            case 'review_cancelled':
+              applyReviewCancellation(store, msg, store.reviewRevision, reviewTestStatus)
+              break
+            case 'review_end':
+              store.endFeedback(msg.revision)
+              break
+            case 'review_error':
+              store.failFeedback(msg.error || msg.reason || 'AI 검토 중 오류가 발생했습니다.', msg.revision)
+              break
             case 'feedback_start':
-              store.startFeedback()
+              if (!store.isStreaming || store.activeReviewRevision !== msg.revision) {
+                store.startFeedback(msg.revision, msg.semantic_hash, msg.files, reviewTestStatus, msg.request_id)
+              }
               break
             case 'feedback_chunk':
               if (msg.content) {
-                store.addFeedbackChunk(msg.content)
+                store.addFeedbackChunk(msg.content, msg.revision)
               }
               break
             case 'feedback_end':
-              store.endFeedback()
+              store.endFeedback(msg.revision)
               break
             case 'sync_status':
-              if (msg.last_sync) store.setLastSync(msg.last_sync)
-              if (msg.changed) {
-                store.setStepComplete(false)
-                store.setTestResult(null)
-              }
+              applySyncStatus(store, msg)
               break
             case 'test_result': {
               const passed = msg.passed === true
-              store.setTestResult({ passed, summary: msg.summary ?? '' })
+              store.setTestResult({
+                passed,
+                summary: msg.summary ?? '',
+                scope: msg.test_scope,
+                inputHash: msg.test_input_hash,
+              })
+              store.setReviewTestStatus(passed ? 'passed' : 'failed')
               if (!passed) store.setStepComplete(false)
               break
             }
@@ -148,5 +249,5 @@ export function useWebSocket(enabled = true, retryKey = 0) {
       ws.current = null
       useStore.getState().setWsStatus('disconnected')
     }
-  }, [enabled, projectDir, retryKey])
+  }, [enabled, projectDir, projectSessionEpoch, retryKey])
 }

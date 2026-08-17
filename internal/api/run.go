@@ -18,6 +18,7 @@ import (
 	"github.com/coding-tutor/internal/pathguard"
 	"github.com/coding-tutor/internal/project"
 	"github.com/coding-tutor/internal/toolchain"
+	"github.com/coding-tutor/internal/watcher"
 	wsserver "github.com/coding-tutor/internal/ws"
 	"github.com/gin-gonic/gin"
 )
@@ -28,8 +29,11 @@ const (
 )
 
 var (
-	broadcastTestResult   = wsserver.Global.BroadcastTestResultForProject
-	broadcastStepComplete = wsserver.Global.BroadcastStepCompleteForProject
+	broadcastTestResult                = wsserver.Global.BroadcastTestResultForProject
+	broadcastScopedTestResult          = wsserver.Global.BroadcastTestResultForProjectWithScope
+	broadcastTestResultWithInput       = wsserver.Global.BroadcastTestResultForProjectWithInputHash
+	broadcastScopedTestResultWithInput = wsserver.Global.BroadcastTestResultForProjectWithScopeAndInputHash
+	broadcastStepComplete              = wsserver.Global.BroadcastStepCompleteForProject
 )
 
 // runCommand returns the command args for the given language.
@@ -177,6 +181,11 @@ func RunTest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "지원하지 않는 언어: " + status.Language})
 		return
 	}
+	testInput, err := watcher.CaptureTestInputVersion(dir)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "테스트 입력을 확인할 수 없습니다"})
+		return
+	}
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
@@ -206,7 +215,7 @@ func RunTest(c *gin.Context) {
 	if err != nil {
 		summary := "[오류] stdout pipe: " + err.Error()
 		sendLine(summary)
-		if completionSummary := publishExplicitTestResult(funcName, dir, false, summary); completionSummary != "" {
+		if completionSummary, _ := publishExplicitTestResultIfCurrent(testInput, funcName, dir, false, summary); completionSummary != "" {
 			sendLine("[단계 완료 확인] " + completionSummary)
 		}
 		return
@@ -215,7 +224,7 @@ func RunTest(c *gin.Context) {
 	if err != nil {
 		summary := "[오류] stderr pipe: " + err.Error()
 		sendLine(summary)
-		if completionSummary := publishExplicitTestResult(funcName, dir, false, summary); completionSummary != "" {
+		if completionSummary, _ := publishExplicitTestResultIfCurrent(testInput, funcName, dir, false, summary); completionSummary != "" {
 			sendLine("[단계 완료 확인] " + completionSummary)
 		}
 		return
@@ -224,7 +233,7 @@ func RunTest(c *gin.Context) {
 	if err := cmd.Start(); err != nil {
 		summary := "[테스트 오류] " + err.Error()
 		sendLine(summary)
-		if completionSummary := publishExplicitTestResult(funcName, dir, false, summary); completionSummary != "" {
+		if completionSummary, _ := publishExplicitTestResultIfCurrent(testInput, funcName, dir, false, summary); completionSummary != "" {
 			sendLine("[단계 완료 확인] " + completionSummary)
 		}
 		fmt.Fprintf(c.Writer, "event: done\ndata: 1\n\n")
@@ -273,24 +282,58 @@ func RunTest(c *gin.Context) {
 	}
 
 	passed, summary := explicitTestResult(exitCode, timedOut, lastOutputLine)
-	if completionSummary := publishExplicitTestResult(funcName, dir, passed, summary); completionSummary != "" {
+	completionSummary, published := publishExplicitTestResultIfCurrent(testInput, funcName, dir, passed, summary)
+	if completionSummary != "" {
 		sendLine("[단계 완료 확인] " + completionSummary)
+	}
+	if !published {
+		sendLine("[결과 폐기] 테스트 중 코드 또는 테스트 파일이 변경되어 이 결과를 반영하지 않았습니다.")
 	}
 
 	fmt.Fprintf(c.Writer, "event: done\ndata: %d\n\n", exitCode)
 	flusher.Flush()
 }
 
+func publishExplicitTestResultIfCurrent(version watcher.TestInputVersion, funcName, projectDir string, passed bool, summary string) (string, bool) {
+	if funcName != "" {
+		published := version.PublishIfCurrent(func() {
+			broadcastScopedTestResultWithInput(projectDir, passed, summary, "targeted", version.Hash)
+		})
+		return "", published
+	}
+
+	// Scan completion markers before the final input-hash validation. If an
+	// edit overlaps this scan, PublishIfCurrent observes the new hash and drops
+	// both completion and test-result broadcasts.
+	result := completion.Evaluate(config.Global.BaseDir, projectDir, passed)
+	published := version.PublishIfCurrent(func() {
+		broadcastFullTestResultWithInput(projectDir, passed, summary, result, version.Hash)
+	})
+	if !published {
+		return "", false
+	}
+	return result.Summary(), true
+}
+
 func publishExplicitTestResult(funcName, projectDir string, passed bool, summary string) string {
 	if funcName != "" {
-		broadcastTestResult(projectDir, passed, summary)
+		broadcastScopedTestResult(projectDir, passed, summary, "targeted")
 		return ""
 	}
 
 	result := completion.Evaluate(config.Global.BaseDir, projectDir, passed)
+	broadcastFullTestResult(projectDir, passed, summary, result)
+	return result.Summary()
+}
+
+func broadcastFullTestResult(projectDir string, passed bool, summary string, result completion.Result) {
 	broadcastTestResult(projectDir, passed, completion.AppendSummary(summary, result))
 	broadcastStepComplete(projectDir, result.Complete)
-	return result.Summary()
+}
+
+func broadcastFullTestResultWithInput(projectDir string, passed bool, summary string, result completion.Result, inputHash string) {
+	broadcastTestResultWithInput(projectDir, passed, completion.AppendSummary(summary, result), inputHash)
+	broadcastStepComplete(projectDir, result.Complete)
 }
 
 func explicitTestResult(exitCode int, timedOut bool, lastOutputLine string) (bool, string) {

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -107,10 +108,48 @@ func resolveProjectDir(candidate string) (string, error) {
 // The clinic writes the files and starts the watcher.
 type SetupProjectReq struct {
 	DirSuffix  string            `json:"dir_suffix"`
+	SetupToken string            `json:"setup_token"`
 	Files      map[string]string `json:"files"` // filename → content (includes TUTORSYS.md, quiz.json)
 	Curriculum string            `json:"curriculum"`
 	SkillLevel string            `json:"skill_level"`
 	Language   string            `json:"language"`
+}
+
+const setupTokenFilename = ".clinic-setup-token"
+
+var setupTokenPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+func setupTokenMatches(projectDir, setupToken string) bool {
+	tokenPath, err := pathguard.ResolveChildNoSymlinks(projectDir, setupTokenFilename)
+	if err != nil {
+		return false
+	}
+	info, err := os.Lstat(tokenPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	data, err := os.ReadFile(tokenPath)
+	return err == nil && strings.TrimSpace(string(data)) == setupToken
+}
+
+func activateSetupProject(projectDir string) error {
+	tutorPath, err := pathguard.ResolveChildNoSymlinks(projectDir, "TUTORSYS.md")
+	if err != nil {
+		return fmt.Errorf("resolve curriculum: %w", err)
+	}
+	info, err := os.Lstat(tutorPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("generated project has no regular TUTORSYS.md")
+	}
+	curriculum, err := os.ReadFile(tutorPath)
+	if err != nil {
+		return fmt.Errorf("read curriculum: %w", err)
+	}
+	if err := watcher.Start(projectDir); err != nil {
+		return fmt.Errorf("watcher: %w", err)
+	}
+	project.Global.Set(projectDir, string(curriculum))
+	return nil
 }
 
 // SetupProject writes AI-generated files to disk and starts the file watcher.
@@ -121,27 +160,46 @@ func SetupProject(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !setupTokenPattern.MatchString(strings.TrimSpace(req.SetupToken)) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid setup token"})
+		return
+	}
+	req.SetupToken = strings.TrimSpace(req.SetupToken)
 
 	projectDir, err := pathguard.ResolveChildNoSymlinks(config.Global.BaseDir, req.DirSuffix)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project directory"})
 		return
 	}
-	if err := os.MkdirAll(projectDir, 0755); err != nil {
+	if info, statErr := os.Lstat(projectDir); statErr == nil {
+		if !info.IsDir() || !setupTokenMatches(projectDir, req.SetupToken) {
+			c.JSON(http.StatusConflict, gin.H{"error": "project directory already exists"})
+			return
+		}
+		if err := activateSetupProject(projectDir); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "project_dir": projectDir, "resumed": true})
+		return
+	} else if !os.IsNotExist(statErr) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": statErr.Error()})
+		return
+	}
+
+	baseDir, err := pathguard.Resolve(config.Global.BaseDir, config.Global.BaseDir)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid base directory"})
+		return
+	}
+	stagingDir, err := os.MkdirTemp(baseDir, ".clinic-setup-")
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	validatedProjectDir, err := pathguard.ResolveChildNoSymlinks(config.Global.BaseDir, req.DirSuffix)
-	if err != nil || validatedProjectDir != projectDir {
-		c.JSON(http.StatusForbidden, gin.H{"error": "project directory changed during setup"})
-		return
-	}
-	projectInfo, err := os.Lstat(projectDir)
-	if err != nil || !projectInfo.IsDir() || projectInfo.Mode()&os.ModeSymlink != 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "project path is not a regular directory"})
-		return
-	}
-	files, err := validateGeneratedFiles(projectDir, req.Files)
+	defer os.RemoveAll(stagingDir)
+
+	files, err := validateGeneratedFiles(stagingDir, req.Files)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -161,27 +219,29 @@ func SetupProject(c *gin.Context) {
 
 	// go mod for Go projects (non-fatal)
 	if req.Language == "go" || hasGoFiles(req.Files) {
-		if err := ensureGoMod(projectDir); err != nil {
+		if err := ensureGoMod(stagingDir); err != nil {
 			fmt.Printf("go mod: %v\n", err)
 		}
 	}
 
-	// Set project state and start watcher
-	curriculum := req.Curriculum
-	if curriculum == "" {
-		tutorPath, pathErr := pathguard.ResolveChildNoSymlinks(projectDir, "TUTORSYS.md")
-		if pathErr != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "invalid curriculum path"})
-			return
-		}
-		if data, err := os.ReadFile(tutorPath); err == nil {
-			curriculum = string(data)
-		}
+	if err := os.WriteFile(filepath.Join(stagingDir, setupTokenFilename), []byte(req.SetupToken+"\n"), 0600); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
-	project.Global.Set(projectDir, curriculum)
-
-	if err := watcher.Start(projectDir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
+	if err := os.Rename(stagingDir, projectDir); err != nil {
+		// A retry whose first response was lost is safe only when the opaque
+		// setup token matches. Never overwrite an unrelated learner directory.
+		if setupTokenMatches(projectDir, req.SetupToken) {
+			if activateErr := activateSetupProject(projectDir); activateErr == nil {
+				c.JSON(http.StatusOK, gin.H{"ok": true, "project_dir": projectDir, "resumed": true})
+				return
+			}
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "project directory already exists"})
+		return
+	}
+	if err := activateSetupProject(projectDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -503,7 +563,7 @@ func LoadProject(c *gin.Context) {
 		return
 	}
 
-	if err := watcher.Start(dir); err != nil {
+	if err := watcher.EnsureStarted(dir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
 		return
 	}

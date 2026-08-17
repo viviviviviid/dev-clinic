@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import type { editor } from 'monaco-editor'
 import type { QuizData, QuizItem } from '../../store'
+import { applyQuizCandidate } from './quizSubmission'
 
 interface QuizOverlayProps {
   editor: editor.IStandaloneCodeEditor
@@ -8,7 +9,7 @@ interface QuizOverlayProps {
   content: string
   quizData: QuizData
   solvedHoles: Set<string>
-  onSolve: (key: string, code: string, markerType: string, markerIndex: number) => void
+  onSolve: (key: string, code: string, markerType: string, markerIndex: number) => Promise<boolean>
 }
 
 interface QuizLine {
@@ -31,6 +32,19 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
   const [openWidgets, setOpenWidgets] = useState<Set<string>>(new Set())
   const [hintLevels, setHintLevels] = useState<Record<string, number>>({})
   const [writeInputs, setWriteInputs] = useState<Record<string, string>>({})
+  const [submittingKeys, setSubmittingKeys] = useState<Set<string>>(new Set())
+  const [submitErrors, setSubmitErrors] = useState<Record<string, string>>({})
+  const submittingRef = useRef<Set<string>>(new Set())
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    const submissions = submittingRef.current
+    return () => {
+      mountedRef.current = false
+      submissions.clear()
+    }
+  }, [])
 
   const quizLines = useMemo<QuizLine[]>(() => {
     const lines: QuizLine[] = []
@@ -102,7 +116,7 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
   const updateZoneHeight = useCallback((key: string, height: number) => {
     const zone = openZonesRef.current.get(key)
     if (!zone) return
-    const MAX_ZONE = 400
+    const MAX_ZONE = 480
     const capped = Math.min(Math.max(40, Math.ceil(height)), MAX_ZONE)
     zone.dom.style.height = `${capped}px`
     editor.changeViewZones(accessor => accessor.layoutZone(zone.zoneId))
@@ -112,7 +126,7 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     if (openWidgets.has(key)) return
     const savedScroll = editor.getScrollTop()
     const dom = document.createElement('div')
-    dom.style.height = '300px'
+    dom.style.height = '360px'
     const capturedKey = key
     const initialDocTop = editor.getTopForLineNumber(lineNumber)
 
@@ -145,11 +159,30 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     forceUpdate(n => n + 1)
   }
 
-  function handleSubmit(item: QuizItem) {
+  async function handleSubmit(item: QuizItem) {
+    if (submittingRef.current.has(item.key)) return
+    submittingRef.current.add(item.key)
     const code = writeInputs[item.key] ?? ''
-    if (!code.trim()) return
-    onSolve(item.key, code, item.markerType || 'hole', item.markerIndex ?? 0)
-    closeHint(item.key)
+    setSubmittingKeys(prev => new Set(prev).add(item.key))
+    setSubmitErrors(prev => ({ ...prev, [item.key]: '' }))
+
+    const result = await applyQuizCandidate(code, () => (
+      onSolve(item.key, code, item.markerType || 'hole', item.markerIndex ?? 0)
+    ))
+    submittingRef.current.delete(item.key)
+    if (!mountedRef.current) return
+
+    setSubmittingKeys(prev => {
+      const next = new Set(prev)
+      next.delete(item.key)
+      return next
+    })
+    if (result.applied) {
+      setWriteInputs(prev => ({ ...prev, [item.key]: '' }))
+      closeHint(item.key)
+    } else {
+      setSubmitErrors(prev => ({ ...prev, [item.key]: result.error }))
+    }
   }
 
   return (
@@ -160,6 +193,7 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
         const isBug = item.markerType === 'bug'
         return (
           <button
+            type="button"
             key={key}
             className={`quiz-glyph-btn${isBug ? ' bug' : ' hole'}${isLocked ? ' locked' : ''}${isOpen ? ' open' : ''}`}
             style={{ top: viewTop }}
@@ -169,6 +203,12 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
               else openHint(key, lineNumber)
             }}
             title={isLocked ? '앞 HOLE을 먼저 해결하세요' : (isOpen ? '닫기' : '열기')}
+            aria-label={isLocked
+              ? `${isBug ? '버그' : '빈칸'} 과제 잠김: 앞 과제를 먼저 해결하세요`
+              : `${isBug ? '버그' : '빈칸'} 과제 ${isOpen ? '닫기' : '열기'}`}
+            aria-expanded={isOpen}
+            aria-controls={`quiz-card-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+            disabled={isLocked}
           />
         )
       })}
@@ -181,13 +221,19 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
         return (
           <HintCard
             key={key}
+            quizKey={key}
             item={item}
             top={zone.docTop - scrollTop}
             hints={hints}
             hintLevel={hintLevels[key] ?? 0}
             writeInput={writeInputs[key] ?? ''}
-            onWriteInputChange={(v) => setWriteInputs(prev => ({ ...prev, [key]: v }))}
-            onSubmit={() => handleSubmit(item)}
+            submitting={submittingKeys.has(key)}
+            submitError={submitErrors[key] ?? ''}
+            onWriteInputChange={(v) => {
+              setWriteInputs(prev => ({ ...prev, [key]: v }))
+              if (submitErrors[key]) setSubmitErrors(prev => ({ ...prev, [key]: '' }))
+            }}
+            onSubmit={() => void handleSubmit(item)}
             onRevealHint={() => setHintLevels(prev => ({ ...prev, [key]: Math.min((prev[key] ?? 0) + 1, hints.length - 1) }))}
             onClose={() => closeHint(key)}
             onHeightChange={h => updateZoneHeight(key, h)}
@@ -200,11 +246,14 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
 
 // ── 힌트 카드 ─────────────────────────────────────────
 interface HintCardProps {
+  quizKey: string
   item: QuizItem
   top: number
   hints: string[]
   hintLevel: number
   writeInput: string
+  submitting: boolean
+  submitError: string
   onWriteInputChange: (val: string) => void
   onSubmit: () => void
   onRevealHint: () => void
@@ -213,8 +262,8 @@ interface HintCardProps {
 }
 
 function HintCard({
-  item, top, hints, hintLevel,
-  writeInput, onWriteInputChange, onSubmit,
+  quizKey, item, top, hints, hintLevel,
+  writeInput, submitting, submitError, onWriteInputChange, onSubmit,
   onRevealHint, onClose, onHeightChange,
 }: HintCardProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -233,16 +282,21 @@ function HintCard({
 
   const revealedHints = hints.slice(0, hintLevel + 1)
   const canRevealMore = hintLevel < hints.length - 1
+  const cardId = `quiz-card-${quizKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+  const errorId = `${cardId}-error`
 
   return (
     <div
       ref={containerRef}
+      id={cardId}
       className="quiz-content"
       style={{ top, zIndex: 10 }}
+      role="region"
+      aria-label={`${isBug ? '버그' : '빈칸'} 과제`}
     >
       <div className={`quiz-content-header ${isBug ? 'bug' : 'hole'}`}>
         <span className="quiz-content-title">{isBug ? '🐛 BUG' : '📝 HOLE'}</span>
-        <button className="quiz-content-close" onClick={onClose}>✕</button>
+        <button type="button" className="quiz-content-close" onClick={onClose} aria-label="과제 닫기">✕</button>
       </div>
 
       <div className="quiz-body">
@@ -265,18 +319,30 @@ function HintCard({
               spellCheck={false}
               rows={3}
               autoFocus
+              disabled={submitting}
+              aria-label="과제에 적용할 코드"
+              aria-invalid={submitError ? true : undefined}
+              aria-describedby={submitError ? errorId : `${cardId}-verification-note`}
             />
             <div className="write-input-hint">⌘/Ctrl+Enter 로 제출</div>
           </div>
 
           <button
+            type="button"
             className="write-submit-btn"
             onClick={onSubmit}
-            disabled={!writeInput.trim()}
+            disabled={!writeInput.trim() || submitting}
           >
-            확인 →
+            {submitting ? '적용 중…' : '코드에 적용 →'}
           </button>
         </div>
+
+        <p className="quiz-verification-note" id={`${cardId}-verification-note`}>
+          여기서는 코드를 적용만 합니다. 정답 여부는 적용 후 전체 테스트를 실행해 확인하세요.
+        </p>
+        {submitError && (
+          <p className="quiz-submit-error" id={errorId} role="alert">{submitError}</p>
+        )}
 
         {/* 힌트 섹션 */}
         {hints.length > 0 && (

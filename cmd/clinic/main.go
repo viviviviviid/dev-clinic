@@ -54,47 +54,7 @@ func main() {
 
 	auth := middleware.Auth()
 	apiGroup := r.Group("/api", auth)
-	{
-		apiGroup.GET("/user/settings", api.GetUserSettings)
-		apiGroup.PUT("/user/settings", api.PutUserSettings)
-
-		apiGroup.GET("/daily", api.GetDaily)
-		apiGroup.GET("/daily/history", api.GetDailyHistory)
-		apiGroup.POST("/daily/confirm-stream", api.ConfirmDailyStream)
-		apiGroup.POST("/daily/finalize", api.FinalizeDailyMission)
-		apiGroup.POST("/daily/nurse-chat", api.NurseChatHandler)
-
-		apiGroup.POST("/project/nextstep", api.AdvanceToNextStep)
-		apiGroup.POST("/project/complete", api.CompleteProject)
-		apiGroup.DELETE("/project", api.DeleteProject)
-
-		apiGroup.GET("/fs/list", api.ListDir)
-		apiGroup.GET("/fs/read", api.ReadFile)
-		apiGroup.POST("/fs/write", api.WriteFile)
-		apiGroup.GET("/fs/validate", api.ValidateDir)
-		apiGroup.GET("/fs/search/files", api.SearchFiles)
-		apiGroup.GET("/fs/search/content", api.SearchContent)
-		apiGroup.POST("/fs/rename", api.RenameFile)
-		apiGroup.DELETE("/fs/delete", api.DeleteFsEntry)
-		apiGroup.GET("/fs/git-diff", api.GitDiff)
-
-		apiGroup.GET("/run", api.RunCode)
-		apiGroup.GET("/test", api.RunTest)
-		apiGroup.POST("/goto", api.GotoDefinition)
-		apiGroup.POST("/explain", api.ExplainWrongAnswer)
-		apiGroup.POST("/chat", api.Chat)
-
-		apiGroup.GET("/project/status", localapi.GetProjectStatus)
-		apiGroup.POST("/project/load", localapi.LoadProject)
-		apiGroup.POST("/project/setup", localapi.SetupProject)
-		apiGroup.POST("/project/apply-step", localapi.ApplyStep)
-		apiGroup.GET("/project/read-all", localapi.ReadAllFiles)
-		apiGroup.DELETE("/project/files", localapi.DeleteProjectFiles)
-		apiGroup.POST("/project/stop-watcher", localapi.StopWatcher)
-		apiGroup.GET("/project/snapshots", localapi.ListSnapshots)
-		apiGroup.POST("/project/snapshot/restore", localapi.RestoreSnapshot)
-		apiGroup.GET("/quiz", localapi.GetQuiz)
-	}
+	registerAPIRoutes(apiGroup)
 
 	addr := "127.0.0.1:" + config.Global.Server.Port
 	server := &http.Server{
@@ -108,6 +68,51 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func registerAPIRoutes(apiGroup *gin.RouterGroup) {
+	apiGroup.GET("/user/settings", api.GetUserSettings)
+	apiGroup.PUT("/user/settings", api.PutUserSettings)
+
+	apiGroup.GET("/daily", api.GetDaily)
+	apiGroup.GET("/daily/history", api.GetDailyHistory)
+	apiGroup.POST("/daily/confirm-stream", api.ConfirmDailyStream)
+	apiGroup.POST("/daily/finalize", api.FinalizeDailyMission)
+	apiGroup.POST("/daily/nurse-chat", api.NurseChatHandler)
+
+	apiGroup.POST("/project/nextstep", api.AdvanceToNextStep)
+	apiGroup.POST("/project/complete", api.CompleteProject)
+	apiGroup.DELETE("/project", api.DeleteProject)
+
+	apiGroup.GET("/fs/list", api.ListDir)
+	apiGroup.GET("/fs/read", api.ReadFile)
+	apiGroup.POST("/fs/write", api.WriteFile)
+	apiGroup.GET("/fs/validate", api.ValidateDir)
+	apiGroup.GET("/fs/search/files", api.SearchFiles)
+	apiGroup.GET("/fs/search/content", api.SearchContent)
+	apiGroup.POST("/fs/rename", api.RenameFile)
+	apiGroup.DELETE("/fs/delete", api.DeleteFsEntry)
+	apiGroup.GET("/fs/git-diff", api.GitDiff)
+
+	apiGroup.GET("/run", api.RunCode)
+	apiGroup.GET("/test", api.RunTest)
+	apiGroup.POST("/goto", api.GotoDefinition)
+	apiGroup.POST("/explain", api.ExplainWrongAnswer)
+	apiGroup.POST("/chat", api.Chat)
+	apiGroup.GET("/review/status", api.GetReviewStatus)
+	apiGroup.POST("/review", api.StartReview)
+	apiGroup.POST("/review/cancel", api.CancelReview)
+
+	apiGroup.GET("/project/status", localapi.GetProjectStatus)
+	apiGroup.POST("/project/load", localapi.LoadProject)
+	apiGroup.POST("/project/setup", localapi.SetupProject)
+	apiGroup.POST("/project/apply-step", localapi.ApplyStep)
+	apiGroup.GET("/project/read-all", localapi.ReadAllFiles)
+	apiGroup.DELETE("/project/files", localapi.DeleteProjectFiles)
+	apiGroup.POST("/project/stop-watcher", localapi.StopWatcher)
+	apiGroup.GET("/project/snapshots", localapi.ListSnapshots)
+	apiGroup.POST("/project/snapshot/restore", localapi.RestoreSnapshot)
+	apiGroup.GET("/quiz", localapi.GetQuiz)
 }
 
 func configureBaseDir() {

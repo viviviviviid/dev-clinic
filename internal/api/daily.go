@@ -1,8 +1,10 @@
 package api
 
 import (
-	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -34,22 +35,14 @@ type DailyMission struct {
 	CreatedAt  time.Time `json:"created_at,omitempty"`
 }
 
-type dailyTopicsCacheEntry struct {
-	topics    []ai.TopicSuggestion
-	expiresAt time.Time
-}
-
-var (
-	dailyTopicsMu    sync.Mutex
-	dailyTopicsCache = make(map[string]dailyTopicsCacheEntry)
-)
+var getDailyRecords = supabase.Get
 
 func GetDaily(c *gin.Context) {
 	userID := c.GetString("user_id")
 	today := time.Now().Format("2006-01-02")
 
 	var missions []DailyMission
-	err := supabase.Get(
+	err := getDailyRecords(
 		fmt.Sprintf("daily_missions?user_id=eq.%s&date=eq.%s&order=created_at.asc&select=*", supabase.FilterValue(userID), supabase.FilterValue(today)),
 		&missions,
 	)
@@ -61,67 +54,9 @@ func GetDaily(c *gin.Context) {
 		missions = []DailyMission{}
 	}
 
-	// Always generate topic suggestions so user can add more missions
-	var settings []UserSettings
-	if err := supabase.Get(
-		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", supabase.FilterValue(userID)),
-		&settings,
-	); err != nil || len(settings) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "user settings not found"})
-		return
-	}
-
-	if ai.Global == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI client not initialized"})
-		return
-	}
-
-	// Fetch all history to avoid repeating past topics
-	var allHistory []DailyMission
-	if err := supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&limit=100&select=topic", supabase.FilterValue(userID)), &allHistory); err != nil {
-		log.Printf("daily: history fetch error: %v", err)
-	}
-	pastTopics := make([]string, 0, len(allHistory))
-	seen := map[string]bool{}
-	for _, m := range allHistory {
-		if !seen[m.Topic] {
-			seen[m.Topic] = true
-			pastTopics = append(pastTopics, m.Topic)
-			if len(pastTopics) == 30 {
-				break
-			}
-		}
-	}
-
-	topics, err := generateDailyTopicsCached(c.Request.Context(), userID, today, settings[0].Language, settings[0].SkillLevel, pastTopics)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"missions": missions, "topics": topics})
-}
-
-func generateDailyTopicsCached(ctx context.Context, userID, date, language, skillLevel string, pastTopics []string) ([]ai.TopicSuggestion, error) {
-	key := strings.Join([]string{userID, date, language, skillLevel, strings.Join(pastTopics, "\x00")}, "\x01")
-	now := time.Now()
-
-	dailyTopicsMu.Lock()
-	defer dailyTopicsMu.Unlock()
-	if cached, ok := dailyTopicsCache[key]; ok && now.Before(cached.expiresAt) {
-		return append([]ai.TopicSuggestion(nil), cached.topics...), nil
-	}
-	if ai.Global == nil {
-		return nil, fmt.Errorf("AI client not initialized")
-	}
-	topics, err := ai.Global.GenerateDailyTopics(ctx, language, skillLevel, pastTopics)
-	if err != nil {
-		return nil, err
-	}
-	dailyTopicsCache = map[string]dailyTopicsCacheEntry{
-		key: {topics: append([]ai.TopicSuggestion(nil), topics...), expiresAt: now.Add(15 * time.Minute)},
-	}
-	return topics, nil
+	// Topic generation is intentionally user initiated through nurse chat.
+	// Loading the lobby must remain a read-only operation with no hidden AI cost.
+	c.JSON(http.StatusOK, gin.H{"missions": missions, "topics": []ai.TopicSuggestion{}})
 }
 
 func GetDailyHistory(c *gin.Context) {
@@ -154,9 +89,32 @@ type ConfirmDailyReq struct {
 }
 
 var (
-	dailySlugPattern      = regexp.MustCompile(`^[A-Z][A-Za-z0-9]{0,63}$`)
-	dailyDirSuffixPattern = regexp.MustCompile(`^([0-9]{6})-([A-Z][A-Za-z0-9]{0,63})$`)
+	dailySlugPattern       = regexp.MustCompile(`^[A-Z][A-Za-z0-9]{0,63}$`)
+	dailyDirSuffixPattern  = regexp.MustCompile(`^([0-9]{6})-([A-Z][A-Za-z0-9]{0,63})$`)
+	dailySetupTokenPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+	errDailyProjectExists  = errors.New("daily project directory already exists")
 )
+
+func newDailySetupToken() (string, error) {
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(token[:]), nil
+}
+
+func ensureDailyProjectTargetAvailable(dirSuffix string) error {
+	projectDir, err := pathguard.ResolveChildNoSymlinks(config.Global.BaseDir, dirSuffix)
+	if err != nil {
+		return fmt.Errorf("resolve daily project directory: %w", err)
+	}
+	if _, err := os.Lstat(projectDir); err == nil {
+		return errDailyProjectExists
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect daily project directory: %w", err)
+	}
+	return nil
+}
 
 func validateDailyRequest(req *ConfirmDailyReq) error {
 	req.Topic = strings.TrimSpace(req.Topic)
@@ -201,6 +159,24 @@ func ConfirmDailyStream(c *gin.Context) {
 	}
 	if err := validateDailyRequest(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	dirSuffix := time.Now().Format("060102") + "-" + req.Slug
+	if err := ensureDailyProjectTargetAvailable(dirSuffix); err != nil {
+		if errors.Is(err, errDailyProjectExists) {
+			c.JSON(http.StatusConflict, gin.H{"error": "같은 이름의 오늘 미션이 이미 로컬에 있습니다. 기존 미션을 열거나 다른 주제를 선택해 주세요."})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "프로젝트 생성 경로를 확인하지 못했습니다"})
+		return
+	}
+	existingMissions, err := getDailyMissionsByProjectDir(userID, dirSuffix)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "기존 학습 기록을 확인하지 못해 AI 생성을 시작하지 않았습니다"})
+		return
+	}
+	if len(existingMissions) > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "같은 이름의 오늘 미션 기록이 이미 있습니다. 기존 미션을 열거나 다른 주제를 선택해 주세요."})
 		return
 	}
 
@@ -277,11 +253,14 @@ func ConfirmDailyStream(c *gin.Context) {
 
 	// The browser must first persist these files through /api/project/setup. Only
 	// then does it call /api/daily/finalize to create the active mission row.
-	dateStr := time.Now().Format("060102")
-	dirSuffix := dateStr + "-" + req.Slug
-
+	setupToken, err := newDailySetupToken()
+	if err != nil {
+		sendError("프로젝트 복구 토큰 생성 실패")
+		return
+	}
 	doneData, _ := json.Marshal(map[string]interface{}{
 		"dir_suffix":  dirSuffix,
+		"setup_token": setupToken,
 		"files":       allFiles,
 		"curriculum":  curriculum,
 		"skill_level": s.SkillLevel,
@@ -292,9 +271,10 @@ func ConfirmDailyStream(c *gin.Context) {
 }
 
 type FinalizeDailyReq struct {
-	Topic     string `json:"topic"`
-	Slug      string `json:"slug"`
-	DirSuffix string `json:"dir_suffix"`
+	Topic      string `json:"topic"`
+	Slug       string `json:"slug"`
+	DirSuffix  string `json:"dir_suffix"`
+	SetupToken string `json:"setup_token"`
 }
 
 func validateFinalizeDailyRequest(req *FinalizeDailyReq) (string, error) {
@@ -308,6 +288,10 @@ func validateFinalizeDailyRequestAt(req *FinalizeDailyReq, now time.Time) (strin
 	}
 	req.Topic = dailyReq.Topic
 	req.Slug = dailyReq.Slug
+	req.SetupToken = strings.TrimSpace(req.SetupToken)
+	if !dailySetupTokenPattern.MatchString(req.SetupToken) {
+		return "", fmt.Errorf("invalid setup_token")
+	}
 
 	if req.DirSuffix != strings.TrimSpace(req.DirSuffix) {
 		return "", fmt.Errorf("dir_suffix must not contain surrounding whitespace")
@@ -319,14 +303,17 @@ func validateFinalizeDailyRequestAt(req *FinalizeDailyReq, now time.Time) (strin
 
 	prefix := matches[1]
 	localNow := now.In(time.Local)
-	missionDate := localNow
-	switch prefix {
-	case localNow.Format("060102"):
-	case localNow.AddDate(0, 0, -1).Format("060102"):
-		missionDate = localNow.AddDate(0, 0, -1)
-	default:
-		return "", fmt.Errorf("dir_suffix date must be server-local today or yesterday")
+	missionDate, err := time.ParseInLocation("20060102", "20"+prefix, time.Local)
+	if err != nil || missionDate.Format("060102") != prefix {
+		return "", fmt.Errorf("dir_suffix date is invalid")
 	}
+	today := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, time.Local)
+	if missionDate.After(today) {
+		return "", fmt.Errorf("dir_suffix date must not be in the future")
+	}
+	// The opaque setup token and the on-disk token file prove that this is a
+	// clinic-created project. Do not expire that proof: a user returning after
+	// several days must be able to finalize without regenerating paid AI output.
 	return missionDate.Format("2006-01-02"), nil
 }
 
@@ -343,7 +330,7 @@ func getDailyMissionsByProjectDir(userID, dirSuffix string) ([]DailyMission, err
 	return missions, nil
 }
 
-func verifyFinalizedProjectSetup(dirSuffix string) error {
+func verifyFinalizedProjectSetup(dirSuffix, setupToken string) error {
 	projectDir, err := pathguard.ResolveRelative(config.Global.BaseDir, dirSuffix)
 	if err != nil {
 		return fmt.Errorf("resolve project directory: %w", err)
@@ -363,6 +350,18 @@ func verifyFinalizedProjectSetup(dirSuffix string) error {
 	}
 	if !tutorInfo.Mode().IsRegular() {
 		return fmt.Errorf("TUTORSYS.md is not a regular file")
+	}
+	tokenPath := filepath.Join(projectDir, ".clinic-setup-token")
+	tokenInfo, err := os.Lstat(tokenPath)
+	if err != nil {
+		return fmt.Errorf("stat setup token: %w", err)
+	}
+	if !tokenInfo.Mode().IsRegular() {
+		return fmt.Errorf("setup token is not a regular file")
+	}
+	tokenData, err := os.ReadFile(tokenPath)
+	if err != nil || strings.TrimSpace(string(tokenData)) != setupToken {
+		return fmt.Errorf("setup token does not match")
 	}
 	return nil
 }
@@ -405,7 +404,7 @@ func FinalizeDailyMission(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := verifyFinalizedProjectSetup(req.DirSuffix); err != nil {
+	if err := verifyFinalizedProjectSetup(req.DirSuffix, req.SetupToken); err != nil {
 		log.Printf("daily finalize: local setup is incomplete: %v", err)
 		c.JSON(http.StatusConflict, gin.H{"error": "로컬 프로젝트 설정이 완료되지 않았습니다"})
 		return

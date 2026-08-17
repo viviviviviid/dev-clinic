@@ -16,16 +16,17 @@ var (
 // Spec is the single source of truth for a language's local run/test contract.
 // Its fields are intentionally private so callers cannot mutate the registry.
 type Spec struct {
-	name                 string
-	comment              string
-	instructions         string
-	runCommand           []string
-	testCommand          func(string) []string
-	entrypoint           func(map[string]string) bool
-	testFile             func(string, string) bool
-	dedicatedTestFile    func(string) bool
-	testDeclaration      *regexp.Regexp
-	sourceFileExtensions map[string]struct{}
+	name                  string
+	comment               string
+	instructions          string
+	runCommand            []string
+	testCommand           func(string) []string
+	entrypoint            func(map[string]string) bool
+	testFile              func(string, string) bool
+	dedicatedTestFile     func(string) bool
+	testConfigurationFile func(string) bool
+	testDeclaration       *regexp.Regexp
+	sourceFileExtensions  map[string]struct{}
 }
 
 var registry = []*Spec{
@@ -58,8 +59,9 @@ var registry = []*Spec{
 		dedicatedTestFile: func(filename string) bool {
 			return strings.HasSuffix(path.Base(filename), "_test.go")
 		},
-		testDeclaration:      regexp.MustCompile(`(?m)^[\t ]*func[\t ]+Test[A-Za-z0-9_]*[\t ]*\(`),
-		sourceFileExtensions: extensionSet(".go"),
+		testConfigurationFile: goTestConfigurationFile,
+		testDeclaration:       regexp.MustCompile(`(?m)^[\t ]*func[\t ]+Test[A-Za-z0-9_]*[\t ]*\(`),
+		sourceFileExtensions:  extensionSet(".go"),
 	},
 	{
 		name:       "python",
@@ -86,8 +88,9 @@ var registry = []*Spec{
 			base := path.Base(filename)
 			return strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py")
 		},
-		testDeclaration:      regexp.MustCompile(`(?m)^[\t ]*def[\t ]+test_[A-Za-z0-9_]*[\t ]*\(`),
-		sourceFileExtensions: extensionSet(".py"),
+		testConfigurationFile: pythonTestConfigurationFile,
+		testDeclaration:       regexp.MustCompile(`(?m)^[\t ]*def[\t ]+test_[A-Za-z0-9_]*[\t ]*\(`),
+		sourceFileExtensions:  extensionSet(".py"),
 	},
 	{
 		name:       "rust",
@@ -114,8 +117,9 @@ var registry = []*Spec{
 			return (strings.HasPrefix(filename, "tests/") || strings.Contains(filename, "/tests/")) &&
 				strings.HasSuffix(filename, ".rs")
 		},
-		testDeclaration:      regexp.MustCompile(`(?m)^[\t ]*#[\t ]*\[[\t ]*test[\t ]*\]`),
-		sourceFileExtensions: extensionSet(".rs"),
+		testConfigurationFile: rustTestConfigurationFile,
+		testDeclaration:       regexp.MustCompile(`(?m)^[\t ]*#[\t ]*\[[\t ]*test[\t ]*\]`),
+		sourceFileExtensions:  extensionSet(".rs"),
 	},
 	{
 		name:       "typescript",
@@ -142,8 +146,9 @@ var registry = []*Spec{
 		dedicatedTestFile: func(filename string) bool {
 			return hasAnySuffix(path.Base(filename), ".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx")
 		},
-		testDeclaration:      regexp.MustCompile(`(?m)^[\t ]*(?:test|it)[\t ]*\(`),
-		sourceFileExtensions: extensionSet(".ts", ".tsx"),
+		testConfigurationFile: nodeTestConfigurationFile,
+		testDeclaration:       regexp.MustCompile(`(?m)^[\t ]*(?:test|it)[\t ]*\(`),
+		sourceFileExtensions:  extensionSet(".ts", ".tsx"),
 	},
 	{
 		name:       "javascript",
@@ -170,8 +175,9 @@ var registry = []*Spec{
 		dedicatedTestFile: func(filename string) bool {
 			return hasAnySuffix(path.Base(filename), ".test.js", ".spec.js", ".test.jsx", ".spec.jsx")
 		},
-		testDeclaration:      regexp.MustCompile(`(?m)^[\t ]*(?:test|it)[\t ]*\(`),
-		sourceFileExtensions: extensionSet(".js", ".jsx"),
+		testConfigurationFile: nodeTestConfigurationFile,
+		testDeclaration:       regexp.MustCompile(`(?m)^[\t ]*(?:test|it)[\t ]*\(`),
+		sourceFileExtensions:  extensionSet(".js", ".jsx"),
 	},
 }
 
@@ -191,6 +197,20 @@ func Lookup(language string) (*Spec, bool) {
 func IsDedicatedTestFile(filename string) bool {
 	for _, spec := range registry {
 		if spec.IsDedicatedTestFile(filename) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTestConfigurationFile reports whether a supported toolchain reads the
+// file as a manifest, dependency lock, compiler transform, or test-runner
+// configuration. These files are raw-hashed test inputs but not learner code
+// candidates for AI review.
+func IsTestConfigurationFile(filename string) bool {
+	filename = filepathKey(filename)
+	for _, spec := range registry {
+		if spec.testConfigurationFile != nil && spec.testConfigurationFile(filename) {
 			return true
 		}
 	}
@@ -268,4 +288,50 @@ func hasJestPackageScript(content string) bool {
 	}
 	fields := strings.Fields(manifest.Scripts["test"])
 	return len(fields) > 0 && fields[0] == "jest"
+}
+
+func goTestConfigurationFile(filename string) bool {
+	switch path.Base(filename) {
+	case "go.mod", "go.sum", "go.work", "go.work.sum":
+		return true
+	default:
+		return false
+	}
+}
+
+func pythonTestConfigurationFile(filename string) bool {
+	base := path.Base(filename)
+	switch base {
+	case "pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg", "setup.py",
+		"pipfile", "pipfile.lock", "poetry.lock", ".python-version":
+		return true
+	default:
+		return strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt")
+	}
+}
+
+func rustTestConfigurationFile(filename string) bool {
+	base := path.Base(filename)
+	if base == "cargo.toml" || base == "cargo.lock" || base == "rust-toolchain" || base == "rust-toolchain.toml" {
+		return true
+	}
+	return filename == ".cargo/config" || filename == ".cargo/config.toml" ||
+		strings.HasSuffix(filename, "/.cargo/config") || strings.HasSuffix(filename, "/.cargo/config.toml")
+}
+
+func nodeTestConfigurationFile(filename string) bool {
+	base := path.Base(filename)
+	if strings.HasPrefix(base, "package") && strings.HasSuffix(base, ".json") ||
+		strings.HasPrefix(base, "tsconfig") && strings.HasSuffix(base, ".json") ||
+		strings.HasPrefix(base, "jsconfig") && strings.HasSuffix(base, ".json") ||
+		strings.HasPrefix(base, "jest.config.") || strings.HasPrefix(base, "vitest.config.") ||
+		strings.HasPrefix(base, "babel.config.") {
+		return true
+	}
+	switch base {
+	case "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", ".babelrc", ".swcrc":
+		return true
+	default:
+		return false
+	}
 }

@@ -18,6 +18,33 @@ export interface FeedbackMessage {
   content: string
   timestamp: string
   isStreaming?: boolean
+  revision?: number
+  semanticHash?: string
+  files?: string[]
+  testStatus?: ReviewTestStatus
+}
+
+export type ReviewStatus = 'idle' | 'ready' | 'requesting' | 'reviewing' | 'canceled' | 'error'
+export type ReviewTestStatus = 'not_run' | 'passed' | 'failed'
+export type TestScope = 'full' | 'targeted'
+
+export interface TestResult {
+  passed: boolean
+  summary: string
+  scope?: TestScope
+  inputHash?: string
+}
+
+export interface ReviewFeedbackReplay {
+  revision: number
+  semanticHash: string
+  files: string[]
+  content: string
+  completedAt: string
+}
+
+export function canUseReviewControl(status: ReviewStatus, hasTestContext = false): boolean {
+  return hasTestContext || status === 'ready' || status === 'error' || status === 'requesting' || status === 'reviewing'
 }
 
 export interface ProjectStatus {
@@ -92,6 +119,9 @@ export interface AppState {
   openFileReadOnly: boolean
   changedFiles: Set<string>
   openTabs: OpenTab[]
+  pendingSemanticSync: boolean
+  workspaceMutationLocked: boolean
+  projectSessionEpoch: number
   setFileTree: (tree: FileEntry[]) => void
   setOpenFile: (path: string | null) => void
   setOpenFileContent: (content: string) => void
@@ -101,17 +131,42 @@ export interface AppState {
   addTab: (path: string, content: string) => void
   closeTab: (path: string) => void
   updateTabContent: (path: string, content: string) => void
+  setPendingSemanticSync: (pending: boolean) => void
+  setWorkspaceMutationLocked: (locked: boolean) => void
+  flushEditor: (() => Promise<boolean>) | null
+  setEditorFlush: (flush: (() => Promise<boolean>) | null) => void
 
   // Feedback
   feedbackMessages: FeedbackMessage[]
   currentStreaming: string
   isStreaming: boolean
   lastSync: string | null
-  addFeedbackChunk: (chunk: string) => void
-  startFeedback: () => void
-  cancelFeedback: () => void
-  endFeedback: () => void
+  reviewStatus: ReviewStatus
+  reviewRevision: number
+  activeReviewRevision: number | null
+  reviewServerSessionID: number | null
+  reviewRequestID: string | null
+  reviewSemanticHash: string
+  reviewFiles: string[]
+  reviewTestStatus: ReviewTestStatus
+  reviewError: string | null
+  feedbackUnread: boolean
+  addFeedbackChunk: (chunk: string, revision?: number) => void
+  setReviewIdle: (revision?: number, semanticHash?: string, files?: string[], requestID?: string) => void
+  markReviewReady: (revision: number, semanticHash?: string, files?: string[], testStatus?: ReviewTestStatus, requestID?: string) => void
+  markReviewRequesting: (revision?: number, semanticHash?: string, files?: string[], testStatus?: ReviewTestStatus) => void
+  claimReviewRequest: (hasTestContext?: boolean) => boolean
+  startFeedback: (revision?: number, semanticHash?: string, files?: string[], testStatus?: ReviewTestStatus, requestID?: string) => void
+  cancelFeedback: (revision?: number) => void
+  failFeedback: (message: string, revision?: number) => void
+  endFeedback: (revision?: number) => void
+  replayFeedback: (feedback: ReviewFeedbackReplay) => void
+  setFeedbackRead: () => void
+  setReviewTestStatus: (status: ReviewTestStatus) => void
   setLastSync: (time: string) => void
+  setReviewRequestID: (requestID: string | null) => void
+  adoptReviewServerSession: (sessionID: number) => void
+  resetReviewState: () => void
 
   // Step complete
   stepComplete: boolean
@@ -134,8 +189,10 @@ export interface AppState {
   setSnapshots: (s: string[]) => void
 
   // Test result
-  testResult: { passed: boolean; summary: string } | null
-  setTestResult: (r: { passed: boolean; summary: string } | null) => void
+  testResult: TestResult | null
+  setTestResult: (r: TestResult | null) => void
+  testOutput: string
+  setTestOutput: (output: string) => void
 
   // Skill level
   skillLevel: SkillLevel
@@ -190,16 +247,31 @@ type WorkspaceState = Pick<AppState,
   | 'openFileReadOnly'
   | 'changedFiles'
   | 'openTabs'
+  | 'pendingSemanticSync'
+  | 'workspaceMutationLocked'
+  | 'projectSessionEpoch'
+  | 'flushEditor'
   | 'feedbackMessages'
   | 'currentStreaming'
   | 'isStreaming'
   | 'lastSync'
+  | 'reviewStatus'
+  | 'reviewRevision'
+  | 'activeReviewRevision'
+  | 'reviewServerSessionID'
+  | 'reviewRequestID'
+  | 'reviewSemanticHash'
+  | 'reviewFiles'
+  | 'reviewTestStatus'
+  | 'reviewError'
+  | 'feedbackUnread'
   | 'stepComplete'
   | 'projectComplete'
   | 'diagnostics'
   | 'pendingNavigate'
   | 'snapshots'
   | 'testResult'
+  | 'testOutput'
   | 'quizData'
   | 'solvedHoles'
   | 'chatMessages'
@@ -220,16 +292,31 @@ function createWorkspaceState(): WorkspaceState {
     openFileReadOnly: false,
     changedFiles: new Set(),
     openTabs: [],
+    pendingSemanticSync: false,
+    workspaceMutationLocked: false,
+    projectSessionEpoch: 0,
+    flushEditor: null,
     feedbackMessages: [],
     currentStreaming: '',
     isStreaming: false,
     lastSync: null,
+    reviewStatus: 'idle',
+    reviewRevision: 0,
+    activeReviewRevision: null,
+    reviewServerSessionID: null,
+    reviewRequestID: null,
+    reviewSemanticHash: '',
+    reviewFiles: [],
+    reviewTestStatus: 'not_run',
+    reviewError: null,
+    feedbackUnread: false,
     stepComplete: false,
     projectComplete: false,
     diagnostics: [],
     pendingNavigate: null,
     snapshots: [],
     testResult: null,
+    testOutput: '',
     quizData: {},
     solvedHoles: new Set(),
     chatMessages: [],
@@ -264,6 +351,10 @@ export const useStore = create<AppState>((set, get) => ({
   openFileReadOnly: false,
   changedFiles: new Set(),
   openTabs: [],
+  pendingSemanticSync: false,
+  workspaceMutationLocked: false,
+  projectSessionEpoch: 0,
+  flushEditor: null,
   setFileTree: (tree) => set({ fileTree: tree }),
   setOpenFile: (path) => set({ openFile: path, openFileReadOnly: false }),
   setOpenFileContent: (content) => {
@@ -325,35 +416,242 @@ export const useStore = create<AppState>((set, get) => ({
       ...(openFile === path ? { openFileContent: content } : {}),
     })
   },
+  setEditorFlush: (flushEditor) => set({ flushEditor }),
+  setPendingSemanticSync: (pendingSemanticSync) => set({ pendingSemanticSync }),
+  setWorkspaceMutationLocked: (workspaceMutationLocked) => set({ workspaceMutationLocked }),
 
   // Feedback
   feedbackMessages: [],
   currentStreaming: '',
   isStreaming: false,
   lastSync: null,
-  startFeedback: () =>
-    set({ isStreaming: true, currentStreaming: '' }),
-  cancelFeedback: () =>
-    set({ isStreaming: false, currentStreaming: '' }),
-  addFeedbackChunk: (chunk) =>
-    set((s) => s.isStreaming ? { currentStreaming: s.currentStreaming + chunk } : {}),
-  endFeedback: () =>
+  reviewStatus: 'idle',
+  reviewRevision: 0,
+  activeReviewRevision: null,
+  reviewServerSessionID: null,
+  reviewRequestID: null,
+  reviewSemanticHash: '',
+  reviewFiles: [],
+  reviewTestStatus: 'not_run',
+  reviewError: null,
+  feedbackUnread: false,
+  setReviewIdle: (revision, semanticHash, files, requestID) =>
     set((s) => {
-      if (!s.isStreaming) return {}
+      const idleRevision = revision ?? s.reviewRevision
+      if (idleRevision < s.reviewRevision) return {}
       return {
+        reviewStatus: 'idle',
+        reviewRevision: idleRevision,
+        activeReviewRevision: null,
+        reviewRequestID: requestID ?? s.reviewRequestID,
+        reviewSemanticHash: semanticHash ?? s.reviewSemanticHash,
+        reviewFiles: files ?? [],
+        reviewError: null,
         isStreaming: false,
-        feedbackMessages: [
-          ...s.feedbackMessages,
-          {
-            id: Date.now().toString(),
-            content: s.currentStreaming,
-            timestamp: new Date().toISOString(),
-          },
-        ],
         currentStreaming: '',
       }
     }),
+  markReviewReady: (revision, semanticHash, files, testStatus, requestID) =>
+    set((s) => {
+      if (revision < s.reviewRevision) return {}
+      return {
+        reviewStatus: 'ready',
+        reviewRevision: revision,
+        activeReviewRevision: null,
+        reviewRequestID: requestID ?? s.reviewRequestID,
+        reviewSemanticHash: semanticHash ?? s.reviewSemanticHash,
+        reviewFiles: files ?? s.reviewFiles,
+        reviewTestStatus: testStatus ?? s.reviewTestStatus,
+        reviewError: null,
+        isStreaming: false,
+        currentStreaming: '',
+      }
+    }),
+  markReviewRequesting: (revision, semanticHash, files, testStatus) =>
+    set((s) => {
+      const requestedRevision = revision ?? s.reviewRevision
+      if (requestedRevision < s.reviewRevision) return {}
+      return {
+        reviewStatus: 'requesting',
+        reviewRevision: requestedRevision,
+        activeReviewRevision: requestedRevision,
+        reviewRequestID: null,
+        reviewSemanticHash: semanticHash ?? s.reviewSemanticHash,
+        reviewFiles: files ?? s.reviewFiles,
+        reviewTestStatus: testStatus ?? s.reviewTestStatus,
+        reviewError: null,
+      }
+    }),
+  claimReviewRequest: (hasTestContext = false) => {
+    let claimed = false
+    set((s) => {
+      if (s.reviewStatus === 'requesting' || s.reviewStatus === 'reviewing' ||
+          !canUseReviewControl(s.reviewStatus, hasTestContext)) {
+        return {}
+      }
+      claimed = true
+      return {
+        reviewStatus: 'requesting',
+        activeReviewRevision: s.reviewRevision,
+        reviewRequestID: null,
+        reviewError: null,
+      }
+    })
+    return claimed
+  },
+  startFeedback: (revision, semanticHash, files, testStatus, requestID) =>
+    set((s) => {
+      const startedRevision = revision ?? s.activeReviewRevision ?? s.reviewRevision
+      if (startedRevision < s.reviewRevision) return {}
+      return {
+        isStreaming: true,
+        currentStreaming: '',
+        reviewStatus: 'reviewing',
+        reviewRevision: startedRevision,
+        activeReviewRevision: startedRevision,
+        reviewRequestID: requestID ?? s.reviewRequestID,
+        reviewSemanticHash: semanticHash ?? s.reviewSemanticHash,
+        reviewFiles: files ?? s.reviewFiles,
+        reviewTestStatus: testStatus ?? s.reviewTestStatus,
+        reviewError: null,
+      }
+    }),
+  cancelFeedback: (revision) =>
+    set((s) => {
+      if (revision !== undefined && s.activeReviewRevision !== null && revision !== s.activeReviewRevision) return {}
+      const wasActive = s.isStreaming || s.reviewStatus === 'requesting' || s.reviewStatus === 'reviewing'
+      return {
+        isStreaming: false,
+        currentStreaming: '',
+        activeReviewRevision: null,
+        reviewRequestID: s.reviewRequestID,
+        ...(wasActive ? { reviewStatus: 'canceled' as const } : {}),
+      }
+    }),
+  failFeedback: (message, revision) =>
+    set((s) => {
+      if (revision !== undefined && revision < s.reviewRevision) return {}
+      return {
+        isStreaming: false,
+        currentStreaming: '',
+        activeReviewRevision: null,
+        reviewRequestID: s.reviewRequestID,
+        reviewStatus: 'error',
+        reviewError: message,
+      }
+    }),
+  addFeedbackChunk: (chunk, revision) =>
+    set((s) => {
+      if (!s.isStreaming) return {}
+      if (revision !== undefined && revision !== s.activeReviewRevision) return {}
+      return { currentStreaming: s.currentStreaming + chunk, feedbackUnread: true }
+    }),
+  endFeedback: (revision) =>
+    set((s) => {
+      if (!s.isStreaming) return {}
+      if (revision !== undefined && revision !== s.activeReviewRevision) return {}
+      const content = s.currentStreaming.trim()
+      const previous = s.feedbackMessages.at(-1)
+      const duplicate = content !== '' && previous?.content.trim() === content
+      const nextMessages = content === '' || duplicate
+        ? s.feedbackMessages
+        : [
+            ...s.feedbackMessages,
+            {
+              id: `${Date.now()}-${s.activeReviewRevision ?? s.reviewRevision}`,
+              content,
+              timestamp: new Date().toISOString(),
+              revision: s.activeReviewRevision ?? s.reviewRevision,
+              semanticHash: s.reviewSemanticHash,
+              files: s.reviewFiles,
+              testStatus: s.reviewTestStatus,
+            },
+          ].slice(-20)
+      return {
+        isStreaming: false,
+        feedbackMessages: nextMessages,
+        currentStreaming: '',
+        reviewStatus: 'idle',
+        activeReviewRevision: null,
+        reviewRequestID: s.reviewRequestID,
+        reviewError: null,
+      }
+    }),
+  replayFeedback: (feedback) =>
+    set((s) => {
+      const content = feedback.content.trim()
+      if (!content) return {}
+      const duplicate = s.feedbackMessages.some((message) =>
+        message.revision === feedback.revision &&
+        message.semanticHash === feedback.semanticHash &&
+        message.content.trim() === content,
+      )
+      if (duplicate) return {}
+      const newestRevision = s.feedbackMessages.reduce(
+        (latest, message) => Math.max(latest, message.revision ?? 0),
+        0,
+      )
+      if (newestRevision > feedback.revision) return {}
+      return {
+        feedbackMessages: [
+          ...s.feedbackMessages,
+          {
+            id: `replay-${feedback.revision}-${feedback.semanticHash}`,
+            content,
+            timestamp: feedback.completedAt,
+            revision: feedback.revision,
+            semanticHash: feedback.semanticHash,
+            files: feedback.files,
+          },
+        ].slice(-20),
+        feedbackUnread: true,
+      }
+    }),
+  setFeedbackRead: () => set({ feedbackUnread: false }),
+  setReviewTestStatus: (reviewTestStatus) => set({ reviewTestStatus }),
   setLastSync: (time) => set({ lastSync: time }),
+  setReviewRequestID: (reviewRequestID) => set({ reviewRequestID }),
+  adoptReviewServerSession: (reviewServerSessionID) => set({
+    feedbackMessages: [],
+    currentStreaming: '',
+    isStreaming: false,
+    lastSync: null,
+    reviewStatus: 'idle',
+    reviewRevision: 0,
+    activeReviewRevision: null,
+    reviewServerSessionID,
+    reviewRequestID: null,
+    reviewSemanticHash: '',
+    reviewFiles: [],
+    reviewTestStatus: 'not_run',
+    reviewError: null,
+    feedbackUnread: false,
+    pendingSemanticSync: false,
+    stepComplete: false,
+    testResult: null,
+    testOutput: '',
+  }),
+  resetReviewState: () => set((s) => ({
+    feedbackMessages: [],
+    currentStreaming: '',
+    isStreaming: false,
+    lastSync: null,
+    reviewStatus: 'idle',
+    reviewRevision: 0,
+    activeReviewRevision: null,
+    reviewServerSessionID: null,
+    reviewRequestID: null,
+    reviewSemanticHash: '',
+    reviewFiles: [],
+    reviewTestStatus: 'not_run',
+    reviewError: null,
+    feedbackUnread: false,
+    pendingSemanticSync: false,
+    // Force a fresh socket for same-directory watcher restarts. Frames queued
+    // on the previous connection cannot leak old review/test state into the
+    // newly reset revision space.
+    projectSessionEpoch: s.projectSessionEpoch + 1,
+  })),
 
   // Step complete
   stepComplete: false,
@@ -373,7 +671,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Test result
   testResult: null,
-  setTestResult: (r) => set({ testResult: r }),
+  setTestResult: (r) => set({ testResult: r, ...(r === null ? { testOutput: '' } : {}) }),
+  testOutput: '',
+  setTestOutput: (testOutput) => set({ testOutput }),
 
   // Snapshots
   snapshots: [],

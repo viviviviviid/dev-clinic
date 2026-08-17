@@ -47,6 +47,89 @@ func TestValidateDailyRequest(t *testing.T) {
 	}
 }
 
+func TestDailyProjectPreflightRejectsExistingDirectoryBeforeGeneration(t *testing.T) {
+	original := *config.Global
+	t.Cleanup(func() { *config.Global = original })
+	config.Global.BaseDir = t.TempDir()
+
+	const suffix = "260817-GoBasics"
+	if err := ensureDailyProjectTargetAvailable(suffix); err != nil {
+		t.Fatalf("missing target rejected: %v", err)
+	}
+	projectDir := filepath.Join(config.Global.BaseDir, suffix)
+	if err := os.Mkdir(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "main.go"), []byte("learner work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureDailyProjectTargetAvailable(suffix); !errors.Is(err, errDailyProjectExists) {
+		t.Fatalf("existing target error = %v, want errDailyProjectExists", err)
+	}
+	data, err := os.ReadFile(filepath.Join(projectDir, "main.go"))
+	if err != nil || string(data) != "learner work" {
+		t.Fatalf("preflight changed existing work: %q, %v", data, err)
+	}
+}
+
+func TestNewDailySetupTokenIsOpaqueAndUnique(t *testing.T) {
+	first, err := newDailySetupToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newDailySetupToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dailySetupTokenPattern.MatchString(first) || !dailySetupTokenPattern.MatchString(second) {
+		t.Fatalf("invalid token format: %q %q", first, second)
+	}
+	if first == second {
+		t.Fatal("setup tokens unexpectedly match")
+	}
+}
+
+func TestGetDailyLoadsLobbyWithoutGeneratingTopics(t *testing.T) {
+	oldGet := getDailyRecords
+	defer func() { getDailyRecords = oldGet }()
+
+	calls := 0
+	getDailyRecords = func(path string, result interface{}) error {
+		calls++
+		missions, ok := result.(*[]DailyMission)
+		if !ok {
+			t.Fatalf("unexpected daily result target %T", result)
+		}
+		*missions = []DailyMission{{ID: "mission-1", UserID: "user-1", Topic: "Go basics"}}
+		return nil
+	}
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("user_id", "user-1")
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/daily", nil)
+
+	GetDaily(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("Supabase reads = %d, want exactly one lobby mission read", calls)
+	}
+	var response struct {
+		Missions []DailyMission       `json:"missions"`
+		Topics   []ai.TopicSuggestion `json:"topics"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Missions) != 1 || len(response.Topics) != 0 {
+		t.Fatalf("response = %#v, want missions and no generated topics", response)
+	}
+}
+
 func TestBuildRequiredNewbieQuizFile(t *testing.T) {
 	quiz := map[string]ai.QuizItem{"main.go:hole:0": {
 		Key: "main.go:hole:0", Filename: "main.go", MarkerType: "hole",
@@ -102,6 +185,7 @@ func TestBuildRequiredNewbieQuizFile(t *testing.T) {
 
 func TestValidateFinalizeDailyRequest(t *testing.T) {
 	now := time.Date(2026, time.August, 17, 0, 5, 0, 0, time.Local)
+	const setupToken = "0123456789abcdef0123456789abcdef"
 	tests := []struct {
 		name     string
 		req      FinalizeDailyReq
@@ -110,27 +194,32 @@ func TestValidateFinalizeDailyRequest(t *testing.T) {
 	}{
 		{
 			name:     "server suffix from before midnight remains valid",
-			req:      FinalizeDailyReq{Topic: "Go 동시성", Slug: "GoConcurrency", DirSuffix: "260816-GoConcurrency"},
+			req:      FinalizeDailyReq{Topic: "Go 동시성", Slug: "GoConcurrency", DirSuffix: "260816-GoConcurrency", SetupToken: setupToken},
 			wantDate: "2026-08-16",
 		},
 		{
 			name:     "server suffix from today",
-			req:      FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "260817-GoBasics"},
+			req:      FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "260817-GoBasics", SetupToken: setupToken},
 			wantDate: "2026-08-17",
 		},
 		{
 			name:    "slug mismatch",
-			req:     FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "260817-OtherSlug"},
+			req:     FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "260817-OtherSlug", SetupToken: setupToken},
 			wantErr: true,
 		},
 		{
-			name:    "arbitrary past date is not server-issued",
-			req:     FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "240229-GoBasics"},
+			name:     "older pending setup remains recoverable",
+			req:      FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "240229-GoBasics", SetupToken: setupToken},
+			wantDate: "2024-02-29",
+		},
+		{
+			name:    "future date",
+			req:     FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "260818-GoBasics", SetupToken: setupToken},
 			wantErr: true,
 		},
 		{
 			name:    "path traversal",
-			req:     FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "260817-../GoBasics"},
+			req:     FinalizeDailyReq{Topic: "Go", Slug: "GoBasics", DirSuffix: "260817-../GoBasics", SetupToken: setupToken},
 			wantErr: true,
 		},
 	}
@@ -154,7 +243,8 @@ func TestVerifyFinalizedProjectSetupRequiresRegularTutorFile(t *testing.T) {
 	t.Cleanup(func() { *config.Global = original })
 	config.Global.BaseDir = t.TempDir()
 
-	if err := verifyFinalizedProjectSetup("MissingProject"); err == nil {
+	const setupToken = "0123456789abcdef0123456789abcdef"
+	if err := verifyFinalizedProjectSetup("MissingProject", setupToken); err == nil {
 		t.Fatal("missing project directory was accepted")
 	}
 
@@ -162,7 +252,7 @@ func TestVerifyFinalizedProjectSetupRequiresRegularTutorFile(t *testing.T) {
 	if err := os.MkdirAll(noTutorDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyFinalizedProjectSetup("NoTutor"); err == nil {
+	if err := verifyFinalizedProjectSetup("NoTutor", setupToken); err == nil {
 		t.Fatal("project without TUTORSYS.md was accepted")
 	}
 
@@ -170,7 +260,7 @@ func TestVerifyFinalizedProjectSetupRequiresRegularTutorFile(t *testing.T) {
 	if err := os.MkdirAll(tutorDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyFinalizedProjectSetup("TutorDirectory"); err == nil {
+	if err := verifyFinalizedProjectSetup("TutorDirectory", setupToken); err == nil {
 		t.Fatal("directory named TUTORSYS.md was accepted as a regular file")
 	}
 
@@ -181,7 +271,10 @@ func TestVerifyFinalizedProjectSetupRequiresRegularTutorFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(validDir, "TUTORSYS.md"), []byte("# tutor"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyFinalizedProjectSetup("ValidProject"); err != nil {
+	if err := os.WriteFile(filepath.Join(validDir, ".clinic-setup-token"), []byte(setupToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFinalizedProjectSetup("ValidProject", setupToken); err != nil {
 		t.Fatalf("valid setup rejected: %v", err)
 	}
 }
@@ -258,6 +351,42 @@ func (s *dailyMissionStore) requestCount() int {
 	return s.requests
 }
 
+func TestConfirmDailyStreamRejectsExistingMissionBeforeAIGeneration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dirSuffix := time.Now().In(time.Local).Format("060102") + "-GoBasics"
+	store := &dailyMissionStore{rows: []DailyMission{{
+		UserID: "user-1", Topic: "Go", Slug: "GoBasics", ProjectDir: dirSuffix, Status: "active",
+	}}}
+
+	original := *config.Global
+	t.Cleanup(func() { *config.Global = original })
+	originalTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+	http.DefaultTransport = dailyRoundTripFunc(store.RoundTrip)
+	config.Global.BaseDir = t.TempDir()
+	config.Global.Supabase.URL = "https://test.supabase.invalid"
+	config.Global.Supabase.ServiceRoleKey = "test-service-role"
+
+	body, err := json.Marshal(ConfirmDailyReq{Topic: "Go", Slug: "GoBasics"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Set("user_id", "user-1")
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/daily/confirm-stream", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	ConfirmDailyStream(c)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", response.Code, response.Body.String())
+	}
+	if calls := store.requestCount(); calls != 1 {
+		t.Fatalf("database requests = %d, want one preflight read", calls)
+	}
+}
+
 func finalizeRequest(t *testing.T, userID string, request FinalizeDailyReq) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(request)
@@ -293,9 +422,10 @@ func TestFinalizeDailyMissionCreatesOnlyOnFinalizeAndIsIdempotent(t *testing.T) 
 
 	missionDate := time.Now().In(time.Local)
 	request := FinalizeDailyReq{
-		Topic:     "Go 동시성",
-		Slug:      "GoConcurrency",
-		DirSuffix: missionDate.Format("060102") + "-GoConcurrency",
+		Topic:      "Go 동시성",
+		Slug:       "GoConcurrency",
+		DirSuffix:  missionDate.Format("060102") + "-GoConcurrency",
+		SetupToken: "0123456789abcdef0123456789abcdef",
 	}
 	response := finalizeRequest(t, "user-1", request)
 	if response.Code != http.StatusConflict {
@@ -313,6 +443,9 @@ func TestFinalizeDailyMissionCreatesOnlyOnFinalizeAndIsIdempotent(t *testing.T) 
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(projectDir, "TUTORSYS.md"), []byte("# tutor"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".clinic-setup-token"), []byte(request.SetupToken+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

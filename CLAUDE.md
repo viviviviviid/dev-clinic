@@ -25,6 +25,7 @@ make build
 - 모든 디스크 경로는 `config.Global.BaseDir` 내부여야 한다. `internal/pathguard`와 `os.Root` 방어를 우회하지 않는다.
 - 생성 파일은 확장자·파일 수·개별/전체 byte budget을 검증한 뒤 기록한다.
 - 생성 테스트 자동 실행은 기본 비활성이다. Run/Test는 사용자의 명시적 동작이다.
+- watcher는 의미 있는 소스 변경을 revision으로 표시할 뿐 AI를 자동 호출하지 않는다. `/api/review`의 명시적 요청만 피드백을 시작하며 새 revision은 진행 중 요청과 오래된 응답을 취소한다.
 - Gemini/Supabase/OpenAI 비밀을 frontend, URL, WebSocket, terminal/LSP/Codex child env에 전달하지 않는다.
 - `VITE_*`에는 Supabase URL과 anon key처럼 공개 가능한 값만 둔다.
 

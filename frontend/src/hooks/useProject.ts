@@ -1,6 +1,13 @@
 import { useStore } from '../store'
 import type { ChatMessage, FileEntry, ProjectStatus, QuizData } from '../store'
 import { ApiError, apiFetch, apiJson } from '../lib/api'
+import {
+  reviewSessionDecision,
+  sameClientReviewSnapshot,
+  shouldApplyReviewSnapshot,
+  type ClientReviewSnapshot,
+  type ReviewSnapshotMode,
+} from './reviewSnapshot'
 
 export interface TopicSuggestion {
   name: string
@@ -51,6 +58,7 @@ interface ProjectCompleteResponse {
 
 interface ConfirmDailyDone {
   dir_suffix: string
+  setup_token: string
   files: Record<string, string>
   curriculum: string
   skill_level: string
@@ -61,6 +69,29 @@ interface MissionSetupResult {
   project_dir: string
   files: string[]
   error?: string
+}
+
+export interface PendingMissionFinalize {
+  topic: string
+  slug: string
+  dir_suffix: string
+  setup_token: string
+  project_dir: string
+  files: string[]
+  skill_level: string
+  setup_files?: Record<string, string>
+  curriculum?: string
+  language?: string
+}
+
+export class MissionFinalizePendingError extends Error {
+  readonly pending: PendingMissionFinalize
+
+  constructor(pending: PendingMissionFinalize, cause: unknown) {
+    super('AI 생성 결과는 보존했지만 로컬 적용 또는 학습 기록 확정을 마치지 못했습니다. AI를 다시 호출하지 말고 복구를 재시도해 주세요.', { cause })
+    this.name = 'MissionFinalizePendingError'
+    this.pending = pending
+  }
 }
 
 interface SetupProjectResponse {
@@ -75,6 +106,172 @@ interface FinalizeDailyResponse {
 interface ReadAllResponse {
   files: Record<string, string>
   curriculum: string
+}
+
+export interface ReviewSnapshot {
+  status: 'idle' | 'ready' | 'reviewing'
+  project_dir?: string
+  revision: number
+  semantic_hash: string
+  session_id?: number
+  request_id?: string
+  disk_synced?: boolean
+  last_sync?: string
+  files?: string[]
+  cancelled?: boolean
+  last_feedback?: {
+    revision: number
+    semantic_hash: string
+    session_id?: number
+    request_id?: string
+    files: string[]
+    content: string
+    completed_at: string
+  }
+}
+
+export interface ReviewRequest {
+  request_id?: string
+  project_dir?: string
+  session_id?: number
+  revision?: number
+  semantic_hash?: string
+  test_context?: {
+    passed?: boolean
+    summary?: string
+    output?: string
+    input_hash?: string
+  }
+}
+
+function newReviewRequestID(): string {
+  const cryptoAPI = globalThis.crypto
+  if (typeof cryptoAPI?.randomUUID === 'function') {
+    return cryptoAPI.randomUUID()
+  }
+  if (typeof cryptoAPI?.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16)
+    cryptoAPI.getRandomValues(bytes)
+    return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+export function currentReviewSnapshot(): ClientReviewSnapshot {
+  const store = useStore.getState()
+  return {
+    status: store.reviewStatus,
+    revision: store.reviewRevision,
+    activeRevision: store.activeReviewRevision,
+    semanticHash: store.reviewSemanticHash,
+    serverSessionID: store.reviewServerSessionID,
+    requestID: store.reviewRequestID,
+  }
+}
+
+export function applyReviewSnapshot(
+  snapshot: ReviewSnapshot,
+  mode: ReviewSnapshotMode = 'authoritative',
+  expected?: ClientReviewSnapshot,
+): boolean {
+  let store = useStore.getState()
+  const currentProjectDir = store.projectStatus?.dir ?? store.projectDir
+  if (snapshot.project_dir && snapshot.project_dir !== currentProjectDir) return false
+  const before = currentReviewSnapshot()
+  const statusStateUnchanged = mode !== 'status' ||
+    (expected !== undefined && sameClientReviewSnapshot(before, expected))
+  const sessionDecision = reviewSessionDecision(
+    snapshot.session_id,
+    before.serverSessionID,
+    mode === 'status',
+  )
+  if (sessionDecision === 'reject') return false
+  if (!statusStateUnchanged) {
+    if (snapshot.disk_synced && snapshot.session_id === before.serverSessionID) {
+      store.setPendingSemanticSync(false)
+      store.setStepComplete(false)
+      store.setTestResult(null)
+      store.setReviewTestStatus('not_run')
+      if (snapshot.last_sync) store.setLastSync(snapshot.last_sync)
+    }
+    return false
+  }
+  if (sessionDecision === 'adopt' && snapshot.session_id !== undefined) {
+    store.adoptReviewServerSession(snapshot.session_id)
+    store = useStore.getState()
+  } else if (!shouldApplyReviewSnapshot(snapshot, before, mode, expected)) {
+    return false
+  }
+  if (snapshot.disk_synced) {
+    store.setPendingSemanticSync(false)
+    store.setStepComplete(false)
+    store.setTestResult(null)
+    store.setReviewTestStatus('not_run')
+    if (snapshot.last_sync) store.setLastSync(snapshot.last_sync)
+    store = useStore.getState()
+  }
+  if (snapshot.last_feedback &&
+      (snapshot.session_id === undefined ||
+       snapshot.last_feedback.session_id === undefined ||
+       snapshot.last_feedback.session_id === snapshot.session_id)) {
+    store.replayFeedback({
+      revision: snapshot.last_feedback.revision,
+      semanticHash: snapshot.last_feedback.semantic_hash,
+      files: snapshot.last_feedback.files ?? [],
+      content: snapshot.last_feedback.content,
+      completedAt: snapshot.last_feedback.completed_at,
+    })
+  }
+  const files = snapshot.files ?? store.reviewFiles
+  const testStatus = store.testResult
+    ? store.testResult.passed ? 'passed' as const : 'failed' as const
+    : 'not_run' as const
+  if (snapshot.status === 'ready') {
+    store.markReviewReady(snapshot.revision, snapshot.semantic_hash, files, testStatus, snapshot.request_id)
+  } else if (snapshot.status === 'reviewing') {
+    if (!store.isStreaming || store.activeReviewRevision !== snapshot.revision) {
+      store.startFeedback(snapshot.revision, snapshot.semantic_hash, files, testStatus, snapshot.request_id)
+    }
+  } else {
+    store.setReviewIdle(snapshot.revision, snapshot.semantic_hash, files, snapshot.request_id)
+  }
+  return true
+}
+
+export function reviewRequestErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 429 && error.details && typeof error.details === 'object') {
+    const seconds = (error.details as Record<string, unknown>).retry_after_seconds
+    if (typeof seconds === 'number') return `AI 검토 호출이 잠시 제한되었습니다. ${seconds}초 후 다시 시도해 주세요.`
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
+export interface ReviewRequestRecovery {
+  code: string
+  snapshot: ReviewSnapshot
+}
+
+export function reviewRecoveryFromRequestError(error: unknown): ReviewRequestRecovery | null {
+  if (!(error instanceof ApiError) || (error.status !== 409 && error.status !== 429) || !isRecord(error.details)) return null
+  if (typeof error.details.code !== 'string' ||
+      typeof error.details.revision !== 'number' ||
+      typeof error.details.semantic_hash !== 'string') return null
+  const status = error.details.status
+  if (status !== 'idle' && status !== 'ready' && status !== 'reviewing') return null
+  const files = Array.isArray(error.details.files)
+    ? error.details.files.filter((file): file is string => typeof file === 'string')
+    : undefined
+  return {
+    code: error.details.code,
+    snapshot: {
+      status,
+      revision: error.details.revision,
+      semantic_hash: error.details.semantic_hash,
+      session_id: typeof error.details.session_id === 'number' ? error.details.session_id : undefined,
+      request_id: typeof error.details.request_id === 'string' ? error.details.request_id : undefined,
+      files,
+    },
+  }
 }
 
 interface NextStepDoneResponse {
@@ -122,6 +319,7 @@ function parseSseEvent(block: string): SseEvent | null {
 function parseConfirmDone(value: unknown): ConfirmDailyDone {
   if (!isRecord(value) ||
       typeof value.dir_suffix !== 'string' ||
+      typeof value.setup_token !== 'string' ||
       typeof value.curriculum !== 'string' ||
       typeof value.skill_level !== 'string' ||
       typeof value.language !== 'string' ||
@@ -139,6 +337,7 @@ function parseConfirmDone(value: unknown): ConfirmDailyDone {
 
   return {
     dir_suffix: value.dir_suffix,
+    setup_token: value.setup_token,
     files,
     curriculum: value.curriculum,
     skill_level: value.skill_level,
@@ -163,7 +362,7 @@ function shouldRetryFinalize(error: unknown): boolean {
   return error.status === 408 || error.status === 429 || error.status >= 500
 }
 
-async function finalizeDailyMission(topic: string, slug: string, dirSuffix: string): Promise<void> {
+async function finalizeDailyMission(topic: string, slug: string, dirSuffix: string, setupToken: string): Promise<void> {
   let lastError: unknown
   for (const delayMs of finalizeRetryDelaysMs) {
     if (delayMs > 0) {
@@ -172,7 +371,7 @@ async function finalizeDailyMission(topic: string, slug: string, dirSuffix: stri
     try {
       const result = await apiJson<FinalizeDailyResponse>('/api/daily/finalize', {
         method: 'POST',
-        body: JSON.stringify({ topic, slug, dir_suffix: dirSuffix }),
+        body: JSON.stringify({ topic, slug, dir_suffix: dirSuffix, setup_token: setupToken }),
         keepalive: true,
       })
       if (!result.ok) throw new ApiError('학습 기록 확정 응답이 올바르지 않습니다.', { kind: 'parse', details: result })
@@ -193,6 +392,23 @@ async function finalizeDailyMission(topic: string, slug: string, dirSuffix: stri
       cause: lastError,
     },
   )
+}
+
+async function retryDailyMissionFinalize(pending: PendingMissionFinalize): Promise<MissionSetupResult> {
+  const setup = await apiJson<SetupProjectResponse>('/api/project/setup', {
+    method: 'POST',
+    body: JSON.stringify({
+      dir_suffix: pending.dir_suffix,
+      setup_token: pending.setup_token,
+      files: pending.setup_files ?? {},
+      curriculum: pending.curriculum ?? '',
+      skill_level: pending.skill_level,
+      language: pending.language ?? '',
+    }),
+  })
+  useStore.getState().resetReviewState()
+  await finalizeDailyMission(pending.topic, pending.slug, pending.dir_suffix, pending.setup_token)
+  return { project_dir: setup.project_dir, files: pending.files }
 }
 
 export function useProject() {
@@ -239,11 +455,13 @@ export function useProject() {
   }
 
   async function loadProject(dir: string, signal?: AbortSignal): Promise<ProjectStatusResponse> {
-    return apiJson<ProjectStatusResponse>('/api/project/load', {
+    const result = await apiJson<ProjectStatusResponse>('/api/project/load', {
       method: 'POST',
       body: JSON.stringify({ dir }),
       signal,
     })
+    useStore.getState().resetReviewState()
+    return result
   }
 
   async function listSnapshots(signal?: AbortSignal): Promise<string[]> {
@@ -252,11 +470,13 @@ export function useProject() {
   }
 
   async function restoreSnapshot(step: string, signal?: AbortSignal): Promise<RestoreSnapshotResponse> {
-    return apiJson<RestoreSnapshotResponse>('/api/project/snapshot/restore', {
+    const result = await apiJson<RestoreSnapshotResponse>('/api/project/snapshot/restore', {
       method: 'POST',
       body: JSON.stringify({ step }),
       signal,
     })
+    useStore.getState().resetReviewState()
+    return result
   }
 
   async function completeMission(): Promise<ProjectCompleteResponse> {
@@ -313,12 +533,60 @@ export function useProject() {
     return requireStream(response)
   }
 
+  async function getReviewStatus(signal?: AbortSignal): Promise<ReviewSnapshot> {
+    return apiJson<ReviewSnapshot>('/api/review/status?refresh=1', { signal })
+  }
+
+  async function requestReview(request: ReviewRequest = {}, signal?: AbortSignal): Promise<ReviewSnapshot> {
+    const store = useStore.getState()
+    if ((store.reviewStatus === 'requesting' || store.reviewStatus === 'reviewing') && store.reviewRequestID) {
+      throw new Error('이미 AI 검토 요청을 처리하고 있습니다.')
+    }
+    const projectDir = request.project_dir ?? store.projectStatus?.dir ?? store.projectDir
+    const sessionID = request.session_id ?? store.reviewServerSessionID
+    if (!projectDir || sessionID === null || !Number.isSafeInteger(sessionID) || sessionID <= 0) {
+      throw new Error('AI 검토 세션을 아직 확인하지 못했습니다. 연결 상태를 확인하고 다시 시도해 주세요.')
+    }
+    const requestID = request.request_id?.trim() || newReviewRequestID()
+    store.setReviewRequestID(requestID)
+    return apiJson<ReviewSnapshot>('/api/review', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...request,
+        request_id: requestID,
+        project_dir: projectDir,
+        session_id: sessionID,
+      }),
+      signal,
+    })
+  }
+
+  async function cancelReview(signal?: AbortSignal, expectedRequestID?: string): Promise<ReviewSnapshot> {
+    const store = useStore.getState()
+    const projectDir = store.projectStatus?.dir ?? store.projectDir
+    const sessionID = store.reviewServerSessionID
+    const requestID = expectedRequestID ?? store.reviewRequestID
+    if (!projectDir || sessionID === null || !Number.isSafeInteger(sessionID) || sessionID <= 0 || !requestID) {
+      throw new Error('중단할 AI 검토 세션을 확인하지 못했습니다. 연결 상태를 확인하고 다시 시도해 주세요.')
+    }
+    return apiJson<ReviewSnapshot>('/api/review/cancel', {
+      method: 'POST',
+      body: JSON.stringify({
+        request_id: requestID,
+        project_dir: projectDir,
+        session_id: sessionID,
+      }),
+      signal,
+    })
+  }
+
   /** AI generation SSE followed by local file setup. */
   async function confirmDailyMissionStream(
     topic: string,
     slug: string,
     onProgress: (stage: string, message: string) => void,
     signal?: AbortSignal,
+    onPendingReady?: (pending: PendingMissionFinalize) => void,
   ): Promise<MissionSetupResult> {
     const response = await apiFetch('/api/daily/confirm-stream', {
       method: 'POST',
@@ -367,23 +635,46 @@ export function useProject() {
     }
 
     onProgress('watcher', '파일 감시자를 시작하고 있습니다...')
-    const setup = await apiJson<SetupProjectResponse>('/api/project/setup', {
-      method: 'POST',
-      body: JSON.stringify({
-        dir_suffix: doneData.dir_suffix,
-        files: doneData.files,
-        curriculum: doneData.curriculum,
-        skill_level: doneData.skill_level,
-        language: doneData.language,
-      }),
-      signal,
-    })
+    const pendingFinalize: PendingMissionFinalize = {
+      topic,
+      slug,
+      dir_suffix: doneData.dir_suffix,
+      setup_token: doneData.setup_token,
+      project_dir: doneData.dir_suffix,
+      files: Object.keys(doneData.files),
+      skill_level: doneData.skill_level,
+      setup_files: doneData.files,
+      curriculum: doneData.curriculum,
+      language: doneData.language,
+    }
+    // Persist the recovery token and generated payload before the first local
+    // mutation. A tab crash or a lost setup response can then resume with the
+    // same idempotency token without paying for AI generation again.
+    onPendingReady?.(pendingFinalize)
+    try {
+      const setup = await apiJson<SetupProjectResponse>('/api/project/setup', {
+        method: 'POST',
+        body: JSON.stringify({
+          dir_suffix: doneData.dir_suffix,
+          setup_token: doneData.setup_token,
+          files: doneData.files,
+          curriculum: doneData.curriculum,
+          skill_level: doneData.skill_level,
+          language: doneData.language,
+        }),
+        signal,
+      })
+      pendingFinalize.project_dir = setup.project_dir
+      useStore.getState().resetReviewState()
 
-    onProgress('finalize', '학습 기록을 확정하고 있습니다...')
-    await finalizeDailyMission(topic, slug, doneData.dir_suffix)
+      onProgress('finalize', '학습 기록을 확정하고 있습니다...')
+      await finalizeDailyMission(topic, slug, doneData.dir_suffix, doneData.setup_token)
+    } catch (cause) {
+      throw new MissionFinalizePendingError(pendingFinalize, cause)
+    }
 
     return {
-      project_dir: setup.project_dir,
+      project_dir: pendingFinalize.project_dir,
       files: Object.keys(doneData.files),
     }
   }
@@ -404,7 +695,7 @@ export function useProject() {
 
     if (next.done) return next
 
-    return apiJson<ProjectStatusResponse>('/api/project/apply-step', {
+    const status = await apiJson<ProjectStatusResponse>('/api/project/apply-step', {
       method: 'POST',
       body: JSON.stringify({
         new_curriculum: next.new_curriculum,
@@ -413,6 +704,8 @@ export function useProject() {
       }),
       signal,
     })
+    useStore.getState().resetReviewState()
+    return status
   }
 
   async function nurseChat(
@@ -440,6 +733,7 @@ export function useProject() {
     getDailyHistory,
     confirmDailyMission,
     confirmDailyMissionStream,
+    retryDailyMissionFinalize,
     loadProject,
     advanceToNextStep,
     completeMission,
@@ -448,6 +742,9 @@ export function useProject() {
     listSnapshots,
     restoreSnapshot,
     sendChat,
+    getReviewStatus,
+    requestReview,
+    cancelReview,
     nurseChat,
   }
 }

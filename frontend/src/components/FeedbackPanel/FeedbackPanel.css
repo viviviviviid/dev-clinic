@@ -41,6 +41,20 @@
   animation: pulse 1s ease-in-out infinite;
 }
 
+.tab-unread {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #1f6feb;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .panel-sync {
   margin-left: auto;
   font-size: 11px;
@@ -60,6 +74,115 @@
 .snapshot-dropdown-header .snapshot-menu {
   top: calc(100% + 4px);
   bottom: auto;
+}
+
+.review-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #21262d;
+  background: #11161d;
+  flex-shrink: 0;
+}
+
+.review-toolbar-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.review-toolbar-status,
+.review-toolbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.review-toolbar-status {
+  color: #8b949e;
+  font-size: 11px;
+}
+
+.review-toolbar-status strong {
+  color: #c9d1d9;
+  font-size: 12px;
+}
+
+.review-state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6e7681;
+  flex-shrink: 0;
+}
+
+.review-toolbar-ready .review-state-dot { background: #d29922; }
+.review-toolbar-ready .review-toolbar-status strong { color: #f2cc60; }
+.review-toolbar-requesting .review-state-dot,
+.review-toolbar-reviewing .review-state-dot {
+  background: #58a6ff;
+  animation: pulse 1s ease-in-out infinite;
+}
+.review-toolbar-requesting .review-toolbar-status strong,
+.review-toolbar-reviewing .review-toolbar-status strong { color: #79c0ff; }
+.review-toolbar-error .review-state-dot { background: #f85149; }
+.review-toolbar-error .review-toolbar-status strong { color: #ff7b72; }
+.review-toolbar-canceled .review-state-dot { background: #8b949e; }
+
+.review-toolbar-meta {
+  margin-top: 3px;
+  color: #6e7681;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.review-toolbar-meta span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.review-toolbar-error {
+  display: block;
+  margin-top: 3px;
+  color: #ff7b72;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-action-btn,
+.test-review-btn {
+  flex-shrink: 0;
+  border: 1px solid #8957e5;
+  border-radius: 5px;
+  background: #2a1645;
+  color: #d2a8ff;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.review-action-btn.reviewing {
+  border-color: #58a6ff;
+  background: #0d2f5e;
+  color: #79c0ff;
+}
+
+.review-action-btn:hover:not(:disabled),
+.test-review-btn:hover:not(:disabled) {
+  border-color: #a371f7;
+  background: #3b1f60;
+}
+
+.review-action-btn:disabled,
+.test-review-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 /* ── Tasks panel ── */
@@ -256,6 +379,20 @@
   white-space: nowrap;
 }
 
+.test-failure-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.test-review-btn {
+  border-color: #9e6a03;
+  background: #2d2108;
+  color: #f2cc60;
+}
+
 .step-complete-actions {
   display: flex;
   gap: 6px;
@@ -339,7 +476,9 @@
 .next-step-btn:focus-visible,
 .dismiss-btn:focus-visible,
 .chat-send-btn:focus-visible,
-.chat-textarea:focus-visible {
+.chat-textarea:focus-visible,
+.review-action-btn:focus-visible,
+.test-review-btn:focus-visible {
   outline: 2px solid #79c0ff;
   outline-offset: 2px;
 }
@@ -368,6 +507,17 @@
 .feedback-empty-hint {
   font-size: 12px;
   color: #30363d;
+}
+
+.feedback-history-limit {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid #30363d;
+  border-radius: 5px;
+  background: #161b22;
+  color: #6e7681;
+  font-size: 11px;
+  text-align: center;
 }
 
 .feedback-message {
@@ -608,4 +758,26 @@
   background: linear-gradient(90deg, #1f6feb, #58a6ff);
   border-radius: 3px;
   transition: width 0.4s ease;
+}
+
+@media (max-width: 900px) {
+  .panel-tab {
+    padding-inline: 8px;
+  }
+
+  .panel-sync {
+    display: none;
+  }
+
+  .review-toolbar {
+    align-items: flex-start;
+  }
+
+  .review-action-btn {
+    padding-inline: 8px;
+  }
+
+  .step-incomplete-banner {
+    align-items: flex-start;
+  }
 }

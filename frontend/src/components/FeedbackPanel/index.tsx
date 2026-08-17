@@ -2,9 +2,15 @@ import { useState, useEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useStore } from '../../store'
+import { canUseReviewControl, useStore } from '../../store'
 import type { ProjectStatus } from '../../store'
-import { useProject } from '../../hooks/useProject'
+import {
+  applyReviewSnapshot,
+  reviewRecoveryFromRequestError,
+  reviewRequestErrorMessage,
+  useProject,
+} from '../../hooks/useProject'
+import type { ReviewRequest } from '../../hooks/useProject'
 import { getErrorMessage, isAbortError } from '../../lib/errors'
 import Confetti from '../Confetti'
 import { ChatSseParser } from './chatSse'
@@ -26,6 +32,8 @@ export default function FeedbackPanel() {
   const chatAbortRef = useRef<AbortController | null>(null)
   const advanceAbortRef = useRef<AbortController | null>(null)
   const restoreAbortRef = useRef<AbortController | null>(null)
+  const reviewAbortRef = useRef<AbortController | null>(null)
+  const [reviewAction, setReviewAction] = useState<'start' | 'cancel' | null>(null)
   const {
     feedbackMessages,
     currentStreaming,
@@ -51,12 +59,39 @@ export default function FeedbackPanel() {
     addChatChunk,
     endChatStream,
     testResult,
+    testOutput,
     setTestResult,
     snapshots,
     setSnapshots,
     addToast,
+    pendingSemanticSync,
+    workspaceMutationLocked,
+    reviewStatus,
+    reviewRevision,
+    reviewFiles,
+    reviewTestStatus,
+    reviewError,
+    feedbackUnread,
+    failFeedback,
+    setFeedbackRead,
   } = useStore()
-  const { advanceToNextStep, completeMission, refreshStatus, refreshFileTree, reloadOpenTabs, loadQuizData, sendChat, listSnapshots, restoreSnapshot } = useProject()
+  const {
+    advanceToNextStep,
+    completeMission,
+    refreshStatus,
+    refreshFileTree,
+    reloadOpenTabs,
+    loadQuizData,
+    sendChat,
+    listSnapshots,
+    restoreSnapshot,
+    requestReview,
+    cancelReview,
+  } = useProject()
+  const requestReviewRef = useRef(requestReview)
+  useEffect(() => { requestReviewRef.current = requestReview }, [requestReview])
+  const cancelReviewRef = useRef(cancelReview)
+  useEffect(() => { cancelReviewRef.current = cancelReview }, [cancelReview])
 
   async function syncAppliedStep(data: ProjectStatus, signal: AbortSignal) {
     setProjectStatus(data)
@@ -82,11 +117,32 @@ export default function FeedbackPanel() {
   }
 
   async function handleNextStep() {
+    const beforeFlush = useStore.getState()
+    if (beforeFlush.workspaceMutationLocked) return
+    if (beforeFlush.pendingSemanticSync) {
+      addToast('저장된 변경의 의미를 확인한 뒤 다음 단계로 이동할 수 있습니다.', 'info')
+      return
+    }
+    if (!beforeFlush.stepComplete || beforeFlush.testResult?.passed !== true || beforeFlush.testResult.scope !== 'full') {
+      addToast('최신 코드로 전체 테스트를 통과한 뒤 다음 단계로 이동할 수 있습니다.', 'info')
+      return
+    }
     if (advanceAbortRef.current) return
     const abort = new AbortController()
     advanceAbortRef.current = abort
     setAdvancing(true)
+    useStore.getState().setWorkspaceMutationLocked(true)
     try {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+      const flushEditor = useStore.getState().flushEditor
+      if (!flushEditor || !await flushEditor()) {
+        throw new Error('최신 코드를 저장하지 못해 다음 단계로 이동하지 않았습니다.')
+      }
+      const afterFlush = useStore.getState()
+      if (afterFlush.pendingSemanticSync || !afterFlush.stepComplete ||
+          afterFlush.testResult?.passed !== true || afterFlush.testResult.scope !== 'full') {
+        throw new Error('저장 중 코드나 테스트 상태가 변경되었습니다. 전체 테스트를 다시 실행해 주세요.')
+      }
       if (pendingCompletion) {
         await finishMission()
         return
@@ -116,11 +172,12 @@ export default function FeedbackPanel() {
         advanceAbortRef.current = null
         setAdvancing(false)
       }
+      useStore.getState().setWorkspaceMutationLocked(false)
     }
   }
 
   async function handleRestoreSnapshot(step: string) {
-    if (restoreAbortRef.current) return
+    if (restoreAbortRef.current || useStore.getState().workspaceMutationLocked) return
     const confirmed = window.confirm(
       '이 스냅샷으로 복원하면 현재 소스 변경과 스냅샷 이후 생성된 파일이 되돌아갑니다. 복구가 어려울 수 있습니다. 계속할까요?',
     )
@@ -130,7 +187,13 @@ export default function FeedbackPanel() {
     restoreAbortRef.current = abort
     setRestoringStep(step)
     setShowSnapshotMenu(false)
+    useStore.getState().setWorkspaceMutationLocked(true)
     try {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+      const flushEditor = useStore.getState().flushEditor
+      if (!flushEditor || !await flushEditor()) {
+        throw new Error('최신 코드를 저장하지 못해 스냅샷을 복원하지 않았습니다.')
+      }
       await restoreSnapshot(step, abort.signal)
       const status = await refreshStatus(abort.signal)
       await refreshFileTree(status.dir, abort.signal)
@@ -150,6 +213,7 @@ export default function FeedbackPanel() {
         restoreAbortRef.current = null
         setRestoringStep(null)
       }
+      useStore.getState().setWorkspaceMutationLocked(false)
     }
   }
 
@@ -210,6 +274,86 @@ export default function FeedbackPanel() {
     }
   }
 
+  async function handleManualReview(request: ReviewRequest = {}) {
+    if (reviewAction || !projectStatus?.loaded) return
+    const isActive = reviewStatus === 'requesting' || reviewStatus === 'reviewing'
+    const hasTestContext = request.test_context !== undefined
+    if (!canUseReviewControl(reviewStatus, hasTestContext)) {
+      addToast('검토할 의미 있는 코드 변경이 없습니다.', 'info')
+      return
+    }
+    const abort = new AbortController()
+    reviewAbortRef.current?.abort()
+    reviewAbortRef.current = abort
+    setReviewAction(isActive ? 'cancel' : 'start')
+
+    try {
+      if (isActive) {
+        const snapshot = await cancelReviewRef.current(abort.signal)
+        applyReviewSnapshot(snapshot)
+        addToast('AI 검토를 중단했습니다.', 'info')
+        return
+      }
+
+      const flushEditor = useStore.getState().flushEditor
+      if (!flushEditor || !await flushEditor()) {
+        throw new Error('최신 코드를 저장하지 못해 AI 검토를 시작하지 않았습니다.')
+      }
+      if (abort.signal.aborted) return
+      const latest = useStore.getState()
+      if (!latest.claimReviewRequest(hasTestContext)) {
+        addToast(
+          latest.reviewStatus === 'requesting' || latest.reviewStatus === 'reviewing'
+            ? '이미 AI 검토 요청을 처리하고 있습니다.'
+            : '검토할 의미 있는 코드 변경이 없습니다.',
+          'info',
+        )
+        return
+      }
+      const snapshot = await requestReviewRef.current(request, abort.signal)
+      applyReviewSnapshot(snapshot, 'start')
+    } catch (error: unknown) {
+      if (isAbortError(error)) return
+      const recovery = !isActive ? reviewRecoveryFromRequestError(error) : null
+      if (recovery) {
+        applyReviewSnapshot(recovery.snapshot)
+        const message = reviewRequestErrorMessage(error)
+        addToast(
+          recovery.code === 'review_stale'
+            ? '코드가 바뀌어 최신 revision으로 갱신했습니다. AI 검토를 다시 눌러 주세요.'
+            : message,
+          recovery.code === 'review_rate_limited' ? 'error' : 'info',
+        )
+        return
+      }
+      const message = reviewRequestErrorMessage(error)
+      if (!isActive) failFeedback(message)
+      addToast(`AI 검토 ${isActive ? '중단' : '요청'} 실패: ${message}`, 'error')
+    } finally {
+      if (reviewAbortRef.current === abort) {
+        reviewAbortRef.current = null
+        setReviewAction(null)
+      }
+    }
+  }
+
+  function handleFailureReview() {
+    if (!testResult || testResult.passed) return
+    if (!testResult.inputHash) {
+      addToast('이 테스트 결과의 코드 버전을 확인할 수 없습니다. 테스트를 다시 실행해 주세요.', 'info')
+      return
+    }
+    const scopeLabel = testResult.scope === 'targeted' ? '개별 테스트' : '전체 테스트'
+    void handleManualReview({
+      test_context: {
+        passed: false,
+        summary: `[${scopeLabel}] ${testResult.summary}`,
+        output: testOutput || undefined,
+        input_hash: testResult.inputHash,
+      },
+    })
+  }
+
   function formatTime(iso: string) {
     try {
       return new Date(iso).toLocaleTimeString('ko-KR', {
@@ -222,11 +366,16 @@ export default function FeedbackPanel() {
     chatAbortRef.current?.abort()
     advanceAbortRef.current?.abort()
     restoreAbortRef.current?.abort()
+    reviewAbortRef.current?.abort()
     cancelChatStream()
   }, [cancelChatStream])
 
-  // 스트리밍 중에는 피드백을 즉시 보여주되 사용자가 고른 탭은 보존합니다.
-  const activeTab: Tab = isStreaming ? 'feedback' : tab
+  // AI 응답이 시작돼도 사용자가 읽고 있던 과제/채팅 탭을 바꾸지 않습니다.
+  const activeTab: Tab = tab
+
+  useEffect(() => {
+    if (activeTab === 'feedback' && feedbackUnread) setFeedbackRead()
+  }, [activeTab, feedbackUnread, setFeedbackRead])
 
   // 새 피드백 or 스트리밍 시작 시 맨 아래로 스크롤
   useEffect(() => {
@@ -244,11 +393,31 @@ export default function FeedbackPanel() {
 
   const prevStepComplete = useRef(false)
   useEffect(() => {
-    if (stepComplete && testResult?.passed && !prevStepComplete.current) {
+    const isCurrentStepComplete = stepComplete && testResult?.passed === true && testResult.scope === 'full'
+    if (isCurrentStepComplete && !prevStepComplete.current) {
       setShowConfetti(true)
     }
-    prevStepComplete.current = !!(stepComplete && testResult?.passed)
-  }, [stepComplete, testResult?.passed])
+    prevStepComplete.current = isCurrentStepComplete
+  }, [stepComplete, testResult?.passed, testResult?.scope])
+
+  const reviewBusy = reviewStatus === 'requesting' || reviewStatus === 'reviewing'
+  const reviewCanStart = canUseReviewControl(reviewStatus) && !reviewBusy
+  const reviewFileSummary = reviewFiles.length > 0
+    ? `${reviewFiles[0]}${reviewFiles.length > 1 ? ` 외 ${reviewFiles.length - 1}개` : ''}`
+    : '변경 파일 없음'
+  const reviewTestLabel = pendingSemanticSync
+    ? '변경 확인 중'
+    : reviewTestStatus === 'passed'
+      ? `${testResult?.scope === 'targeted' ? '개별' : '전체'} 테스트 통과`
+      : reviewTestStatus === 'failed'
+        ? `${testResult?.scope === 'targeted' ? '개별' : '전체'} 테스트 실패`
+        : '테스트 미실행'
+  const reviewStatusLabel = reviewStatus === 'ready'
+    ? '검토 준비됨'
+    : reviewStatus === 'requesting' ? '요청 중'
+      : reviewStatus === 'reviewing' ? '검토 중'
+        : reviewStatus === 'canceled' ? '검토 취소됨'
+          : reviewStatus === 'error' ? '검토 오류' : '저장됨'
 
   return (
     <div className="feedback-panel">
@@ -268,10 +437,14 @@ export default function FeedbackPanel() {
           role="tab"
           aria-selected={activeTab === 'feedback'}
           className={`panel-tab ${activeTab === 'feedback' ? 'active' : ''}`}
-          onClick={() => setTab('feedback')}
+          onClick={() => { setTab('feedback'); setFeedbackRead() }}
         >
           AI 피드백
-          {isStreaming && <span className="tab-dot" />}
+          {feedbackUnread ? (
+            <span className="tab-unread" aria-label="새 피드백 1개">1</span>
+          ) : isStreaming ? (
+            <span className="tab-dot" aria-label="AI 검토 중" />
+          ) : null}
         </button>
         <button
           type="button"
@@ -292,7 +465,7 @@ export default function FeedbackPanel() {
               type="button"
               className="snapshot-btn"
               onClick={() => setShowSnapshotMenu(!showSnapshotMenu)}
-              disabled={!!restoringStep}
+              disabled={workspaceMutationLocked}
               aria-expanded={showSnapshotMenu}
             >
               {restoringStep ? '복원 중…' : '↩ 기록'}
@@ -306,6 +479,7 @@ export default function FeedbackPanel() {
                     key={snapshot}
                     className="snapshot-menu-item"
                     onClick={() => void handleRestoreSnapshot(snapshot)}
+                    disabled={workspaceMutationLocked}
                   >
                     {snapshot}
                   </button>
@@ -315,6 +489,36 @@ export default function FeedbackPanel() {
           </div>
         )}
       </div>
+
+      {projectStatus?.loaded && (
+        <div className={`review-toolbar review-toolbar-${reviewStatus}`}>
+          <div className="review-toolbar-copy" role="status" aria-live="polite">
+            <div className="review-toolbar-status">
+              <span className="review-state-dot" aria-hidden="true" />
+              <strong>{reviewStatusLabel}</strong>
+              <span>r{reviewRevision}</span>
+            </div>
+            <div className="review-toolbar-meta" title={reviewFiles.join(', ')}>
+              <span>{reviewFileSummary}</span>
+              <span aria-hidden="true">·</span>
+              <span>{reviewTestLabel}</span>
+            </div>
+            {reviewError && <span className="review-toolbar-error">{reviewError}</span>}
+          </div>
+          <button
+            type="button"
+            className={`review-action-btn${reviewBusy ? ' reviewing' : ''}`}
+            onClick={() => { void handleManualReview() }}
+            disabled={reviewAction !== null || (!reviewBusy && !reviewCanStart)}
+            aria-keyshortcuts="Control+Enter Meta+Enter"
+            title="현재 저장된 코드에서 의미 있는 변경을 AI가 검토합니다. (⌘/Ctrl+Enter)"
+          >
+            {reviewAction
+              ? reviewAction === 'cancel' ? '중단 중…' : '요청 중…'
+              : reviewBusy ? '■ 검토 중단' : reviewCanStart ? '✦ AI 검토' : '변경 없음'}
+          </button>
+        </div>
+      )}
 
       {projectComplete && (
         <div className="project-complete-banner" role="status">
@@ -335,16 +539,18 @@ export default function FeedbackPanel() {
         </div>
       )}
 
-      {stepComplete && testResult?.passed && (
+      {stepComplete && testResult?.passed && testResult.scope === 'full' && (
         <div className="step-complete-banner" role="status">
-          <span>이 단계를 완료했습니다!</span>
+          <span>{pendingSemanticSync ? '저장된 변경을 확인하고 있습니다…' : '이 단계를 완료했습니다!'}</span>
           <div className="step-complete-actions">
             <button
               onClick={handleNextStep}
-              disabled={advancing}
+              disabled={advancing || pendingSemanticSync || workspaceMutationLocked}
               className="next-step-btn"
             >
-              {advancing
+              {pendingSemanticSync
+                ? '변경 확인 중…'
+                : advancing
                 ? '처리 중…'
                 : pendingStepStatus || pendingCompletion
                   ? '단계 상태 다시 불러오기'
@@ -355,11 +561,21 @@ export default function FeedbackPanel() {
         </div>
       )}
 
-      {stepComplete && !testResult?.passed && (
+      {testResult && !testResult.passed && (
         <div className="step-incomplete-banner" role="status">
-          <span>테스트를 통과해야 다음 단계로 넘어갈 수 있어요.</span>
-          {testResult && <span className="test-summary">{testResult.summary}</span>}
-          <button onClick={() => setStepComplete(false)} className="dismiss-btn">닫기</button>
+          <div className="test-failure-copy">
+            <span>{testResult.scope === 'targeted' ? '개별 테스트가 실패했습니다.' : '전체 테스트가 실패했습니다.'}</span>
+            <span className="test-summary" title={testResult.summary}>{testResult.summary}</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleFailureReview}
+            className="test-review-btn"
+            disabled={reviewAction !== null || reviewBusy || pendingSemanticSync || !testResult.inputHash}
+            title={testResult.inputHash ? '현재 코드와 일치하는 실패 결과를 AI에게 검토 요청합니다.' : '테스트를 다시 실행해 코드 버전을 확인하세요.'}
+          >
+            실패 원인 AI에 묻기
+          </button>
         </div>
       )}
 
@@ -433,15 +649,32 @@ export default function FeedbackPanel() {
         <div className="feedback-content" ref={scrollRef} role="log" aria-live="polite" aria-label="AI 피드백">
           {feedbackMessages.length === 0 && !isStreaming && (
             <div className="feedback-empty">
-              <p>파일을 수정하면</p>
-              <p>AI가 자동으로 피드백을 제공합니다.</p>
-              <p className="feedback-empty-hint">(수정 후 3초 대기)</p>
+              <p>코드는 자동으로 저장됩니다.</p>
+              <p>검토가 필요할 때 <strong>AI 검토</strong>를 눌러 주세요.</p>
+              <p className="feedback-empty-hint">단축키: ⌘/Ctrl+Enter</p>
             </div>
+          )}
+
+          {feedbackMessages.length >= 20 && (
+            <p className="feedback-history-limit" role="note">최근 피드백 20개만 표시합니다.</p>
           )}
 
           {feedbackMessages.map((msg) => (
             <div key={msg.id} className="feedback-message">
-              <div className="feedback-message-time">{formatTime(msg.timestamp)}</div>
+              <div className="feedback-message-time">
+                <span>{formatTime(msg.timestamp)}</span>
+                {msg.revision !== undefined && <span>r{msg.revision}</span>}
+                {msg.files && msg.files.length > 0 && (
+                  <span title={msg.files.join(', ')}>
+                    {msg.files[0]}{msg.files.length > 1 ? ` 외 ${msg.files.length - 1}개` : ''}
+                  </span>
+                )}
+                {msg.testStatus && (
+                  <span>
+                    {msg.testStatus === 'passed' ? '테스트 통과' : msg.testStatus === 'failed' ? '테스트 실패' : '테스트 미실행'}
+                  </span>
+                )}
+              </div>
               <div className="feedback-message-content">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {msg.content.replace('[STEP_COMPLETE]', '')}
@@ -453,7 +686,7 @@ export default function FeedbackPanel() {
           {isStreaming && (
             <div className="feedback-message streaming">
               <div className="feedback-message-time">
-                <span className="streaming-dot" /> 분석 중...
+                <span className="streaming-dot" /> 분석 중 · r{reviewRevision} · {reviewFileSummary}
               </div>
               <div className="feedback-message-content">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>

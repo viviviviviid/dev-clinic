@@ -113,7 +113,16 @@
 .calendar-day:focus-visible,
 .sidebar-mission-open:focus-visible,
 .mission-delete-btn:focus-visible,
-.vn-skip-btn:focus-visible {
+.vn-skip-btn:focus-visible,
+.sidebar-new-mission-btn:focus-visible,
+.new-mission-btn:focus-visible,
+.cal-nav-btn:focus-visible,
+.nurse-chat-skip:focus-visible,
+.nurse-chat-cancel:focus-visible,
+.nurse-chat-topic-btn:focus-visible,
+.nurse-chat-send:focus-visible,
+.creation-cancel-btn:focus-visible,
+.viewport-warning-actions button:focus-visible {
   outline: 2px solid #0066cc;
   outline-offset: 2px;
 }
@@ -212,6 +221,33 @@
   transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), background 0.3s, border-color 0.3s, box-shadow 0.3s;
   flex-shrink: 0;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+}
+
+.sidebar-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.sidebar-empty-state .sidebar-no-missions {
+  padding-bottom: 0.5rem;
+}
+
+.sidebar-new-mission-btn {
+  min-height: 40px;
+  border: 1px solid rgba(0, 102, 204, 0.18);
+  border-radius: 10px;
+  background: #f0f8ff;
+  color: #0066cc;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.sidebar-new-mission-btn:hover {
+  background: #e1f1ff;
 }
 
 .sidebar-mission-open {
@@ -324,6 +360,44 @@
 .cal-nav-group {
   display: flex;
   gap: 0.5rem;
+}
+
+.calendar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.new-mission-btn {
+  min-height: 40px;
+  padding: 0 1rem;
+  border: 1px solid #0066cc;
+  border-radius: 12px;
+  background: #0066cc;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(0, 102, 204, 0.2);
+}
+
+.new-mission-btn:hover {
+  background: #007aff;
+}
+
+.dashboard-width-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: -0.75rem 0.5rem 1.25rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #f6d58d;
+  border-radius: 12px;
+  background: #fff9eb;
+  color: #6f4c08;
+  font-size: 0.82rem;
+  line-height: 1.45;
 }
 
 .cal-nav-btn {
@@ -1287,6 +1361,7 @@
   padding: 0.35rem 1.25rem;
   border-radius: 20px;
   box-shadow: 0 4px 12px rgba(0, 102, 204, 0.3);
+  margin: 0;
 }
 
 /* ─── Nurse Chat Overlay ─────────────────── */
@@ -1333,6 +1408,12 @@
   flex-shrink: 0;
 }
 
+.nurse-chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .nurse-chat-skip {
   background: none;
   border: 1px solid rgba(0, 0, 0, 0.1);
@@ -1351,6 +1432,23 @@
   background: rgba(0, 102, 204, 0.05);
 }
 
+.nurse-chat-cancel {
+  min-height: 34px;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid rgba(214, 48, 49, 0.28);
+  border-radius: 20px;
+  background: rgba(214, 48, 49, 0.06);
+  color: #b42318;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.nurse-chat-cancel:hover {
+  background: rgba(214, 48, 49, 0.12);
+}
+
 .nurse-chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -1360,6 +1458,16 @@
   gap: 0.75rem;
   min-height: 180px;
   max-height: 340px;
+}
+
+.nurse-request-notice {
+  margin: 0;
+  padding: 0.55rem 1.25rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  background: rgba(0, 102, 204, 0.04);
+  color: #59636e;
+  font-size: 0.76rem;
+  line-height: 1.4;
 }
 
 .nurse-chat-msg {
@@ -1577,6 +1685,8 @@
   align-items: center;
   gap: 16px;
   text-align: center;
+  width: min(440px, calc(100vw - 2rem));
+  box-sizing: border-box;
 }
 
 .creation-spinner {
@@ -1600,4 +1710,149 @@
   color: #8b949e;
   font-size: 14px;
   max-width: 280px;
+  margin: 0;
+}
+
+.creation-title {
+  margin: 0;
+  color: #f0f6fc;
+  font-size: 1.15rem;
+  line-height: 1.4;
+}
+
+.creation-cancel-btn {
+  min-height: 42px;
+  padding: 0 1.1rem;
+  border: 1px solid #f85149;
+  border-radius: 10px;
+  background: transparent;
+  color: #ff7b72;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.creation-cancel-btn:hover {
+  background: rgba(248, 81, 73, 0.12);
+}
+
+.creation-lock-note {
+  margin: 0;
+  color: #8b949e;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.viewport-warning-modal {
+  width: min(520px, calc(100vw - 2rem));
+  padding: 2rem;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 20px;
+  background: #fff;
+  color: #1d1d1f;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+}
+
+.viewport-warning-icon {
+  font-size: 2rem;
+}
+
+.viewport-warning-modal h2 {
+  margin: 0.75rem 0;
+  font-size: 1.25rem;
+}
+
+.viewport-warning-modal p {
+  margin: 0;
+  color: #59636e;
+  line-height: 1.6;
+}
+
+.viewport-warning-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.viewport-warning-actions button {
+  min-height: 42px;
+  padding: 0 1rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.viewport-warning-secondary {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  color: #1d1d1f;
+}
+
+.viewport-warning-primary {
+  border: 1px solid #0066cc;
+  background: #0066cc;
+  color: #fff;
+}
+
+.viewport-warning-primary:disabled {
+  border-color: #d2d2d7;
+  background: #e5e5ea;
+  color: #86868b;
+  cursor: not-allowed;
+}
+
+@media (max-width: 520px) {
+  .calendar-header-row {
+    align-items: flex-start;
+  }
+
+  .calendar-header-actions {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .new-mission-btn {
+    min-height: 36px;
+    padding: 0 0.7rem;
+    font-size: 0.78rem;
+  }
+
+  .nurse-chat-panel {
+    inset: 1rem;
+    width: auto;
+    max-height: calc(100vh - 2rem);
+  }
+
+  .nurse-chat-char {
+    display: none;
+  }
+
+  .nurse-chat-header {
+    align-items: flex-start;
+  }
+
+  .nurse-chat-header-actions,
+  .viewport-warning-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .nurse-chat-input-row {
+    flex-wrap: wrap;
+  }
+
+  .nurse-chat-input {
+    flex-basis: 100%;
+  }
+
+  .nurse-chat-send {
+    width: 100%;
+  }
+
+  .creation-modal,
+  .viewport-warning-modal {
+    padding: 1.5rem;
+  }
 }

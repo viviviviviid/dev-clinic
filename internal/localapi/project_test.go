@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/coding-tutor/internal/config"
+	"github.com/coding-tutor/internal/watcher"
 	"github.com/gin-gonic/gin"
 )
 
@@ -221,8 +222,9 @@ func TestSetupProjectRejectsDirectoryTraversal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body, _ := json.Marshal(SetupProjectReq{
-		DirSuffix: "../escape",
-		Files:     map[string]string{"main.go": "package main"},
+		DirSuffix:  "../escape",
+		SetupToken: "0123456789abcdef0123456789abcdef",
+		Files:      map[string]string{"main.go": "package main"},
 	})
 	router := gin.New()
 	router.POST("/setup", SetupProject)
@@ -254,8 +256,9 @@ func TestSetupProjectRejectsExistingGeneratedFileSymlink(t *testing.T) {
 	t.Cleanup(func() { config.Global.BaseDir = previous })
 	gin.SetMode(gin.TestMode)
 	body, _ := json.Marshal(SetupProjectReq{
-		DirSuffix: "260817-GoBasics",
-		Files:     map[string]string{"main.go": "overwritten"},
+		DirSuffix:  "260817-GoBasics",
+		SetupToken: "0123456789abcdef0123456789abcdef",
+		Files:      map[string]string{"main.go": "overwritten"},
 	})
 	router := gin.New()
 	router.POST("/setup", SetupProject)
@@ -263,12 +266,124 @@ func TestSetupProjectRejectsExistingGeneratedFileSymlink(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
+	if response.Code != http.StatusConflict {
 		t.Fatalf("SetupProject() status = %d, body = %s", response.Code, response.Body.String())
 	}
 	data, err := os.ReadFile(target)
 	if err != nil || string(data) != "must remain" {
 		t.Fatalf("generated-file symlink target changed: %q, %v", data, err)
+	}
+}
+
+func TestSetupProjectRejectsExistingProjectWithoutOverwritingLearnerFiles(t *testing.T) {
+	base := t.TempDir()
+	projectDir := filepath.Join(base, "260817-GoBasics")
+	if err := os.Mkdir(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existingPath := filepath.Join(projectDir, "main.go")
+	if err := os.WriteFile(existingPath, []byte("learner work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := config.Global.BaseDir
+	config.Global.BaseDir = base
+	t.Cleanup(func() { config.Global.BaseDir = previous })
+	gin.SetMode(gin.TestMode)
+	body, _ := json.Marshal(SetupProjectReq{
+		DirSuffix:  "260817-GoBasics",
+		SetupToken: "0123456789abcdef0123456789abcdef",
+		Files:      map[string]string{"main.go": "generated replacement\n"},
+	})
+	router := gin.New()
+	router.POST("/setup", SetupProject)
+	request := httptest.NewRequest(http.MethodPost, "/setup", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("SetupProject() status = %d, want 409; body = %s", response.Code, response.Body.String())
+	}
+	data, err := os.ReadFile(existingPath)
+	if err != nil || string(data) != "learner work\n" {
+		t.Fatalf("existing learner file changed: %q, %v", data, err)
+	}
+}
+
+func TestSetupProjectRetryWithSameTokenResumesWithoutRewritingFiles(t *testing.T) {
+	base := t.TempDir()
+	previous := config.Global.BaseDir
+	config.Global.BaseDir = base
+	t.Cleanup(func() {
+		if watcher.Global != nil {
+			watcher.Global.Stop()
+			watcher.Global = nil
+		}
+		config.Global.BaseDir = previous
+	})
+	gin.SetMode(gin.TestMode)
+	const token = "0123456789abcdef0123456789abcdef"
+
+	requestSetup := func(mainContent string) *httptest.ResponseRecorder {
+		t.Helper()
+		body, _ := json.Marshal(SetupProjectReq{
+			DirSuffix:  "260817-GoBasics",
+			SetupToken: token,
+			Files: map[string]string{
+				"TUTORSYS.md": "# curriculum\n",
+				"main.go":     mainContent,
+			},
+			Language: "go",
+		})
+		router := gin.New()
+		router.POST("/setup", SetupProject)
+		request := httptest.NewRequest(http.MethodPost, "/setup", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	if response := requestSetup("package main\n"); response.Code != http.StatusOK {
+		t.Fatalf("first setup status = %d, body = %s", response.Code, response.Body.String())
+	}
+	mainPath := filepath.Join(base, "260817-GoBasics", "main.go")
+	if err := os.WriteFile(mainPath, []byte("learner edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if response := requestSetup("generated replacement\n"); response.Code != http.StatusOK {
+		t.Fatalf("retry setup status = %d, body = %s", response.Code, response.Body.String())
+	}
+	data, err := os.ReadFile(mainPath)
+	if err != nil || string(data) != "learner edit\n" {
+		t.Fatalf("idempotent setup rewrote learner file: %q, %v", data, err)
+	}
+}
+
+func TestSetupProjectInvalidFilesLeaveNoReservedTarget(t *testing.T) {
+	base := t.TempDir()
+	previous := config.Global.BaseDir
+	config.Global.BaseDir = base
+	t.Cleanup(func() { config.Global.BaseDir = previous })
+	gin.SetMode(gin.TestMode)
+	body, _ := json.Marshal(SetupProjectReq{
+		DirSuffix:  "260817-GoBasics",
+		SetupToken: "0123456789abcdef0123456789abcdef",
+		Files:      map[string]string{"../escape.go": "bad"},
+	})
+	router := gin.New()
+	router.POST("/setup", SetupProject)
+	request := httptest.NewRequest(http.MethodPost, "/setup", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Lstat(filepath.Join(base, "260817-GoBasics")); !os.IsNotExist(err) {
+		t.Fatalf("invalid setup left a blocking target: %v", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 export interface EditorAutosave {
   schedule(path: string, content: string): void
   flushPath(path: string): Promise<boolean>
-  flushAll(): Promise<void>
+  flushAll(): Promise<boolean>
   saveNow(path: string, content: string): Promise<boolean>
   hasPendingWrites(): boolean
 }
@@ -12,9 +12,16 @@ interface PendingSave {
   timer: ReturnType<typeof setTimeout>
 }
 
+interface FailedSave {
+  version: number
+  content: string
+}
+
 interface FileSaveState {
   version: number
+  persistedVersion: number
   pending?: PendingSave
+  failed?: FailedSave
   tail: Promise<void>
   queuedWrites: number
 }
@@ -33,16 +40,18 @@ interface AutosaveOptions {
 
 export function createEditorAutosave(options: AutosaveOptions): EditorAutosave {
   const states = new Map<string, FileSaveState>()
+  let scheduleEpoch = 0
 
   function stateFor(path: string): FileSaveState {
     const existing = states.get(path)
     if (existing) return existing
-    const state: FileSaveState = { version: 0, tail: Promise.resolve(), queuedWrites: 0 }
+    const state: FileSaveState = { version: 0, persistedVersion: 0, tail: Promise.resolve(), queuedWrites: 0 }
     states.set(path, state)
     return state
   }
 
   function schedule(path: string, content: string): void {
+    scheduleEpoch++
     const state = stateFor(path)
     state.version++
     if (state.pending) clearTimeout(state.pending.timer)
@@ -58,9 +67,12 @@ export function createEditorAutosave(options: AutosaveOptions): EditorAutosave {
     const result = state.tail.then(async () => {
       try {
         await options.write(path, content)
+        state.persistedVersion = Math.max(state.persistedVersion, version)
+        if (state.failed && state.failed.version <= version) state.failed = undefined
         if (state.version === version && !state.pending) options.onSaved(path)
         return true
       } catch (error: unknown) {
+        if (state.version === version && !state.pending) state.failed = { version, content }
         options.onError(path, error)
         return false
       } finally {
@@ -73,18 +85,36 @@ export function createEditorAutosave(options: AutosaveOptions): EditorAutosave {
 
   async function flushPath(path: string): Promise<boolean> {
     const state = states.get(path)
-    if (!state?.pending) {
-      if (state) await state.tail
-      return true
+    if (!state) return true
+    for (;;) {
+      const pending = state.pending
+      if (pending) {
+        clearTimeout(pending.timer)
+        state.pending = undefined
+        await enqueue(path, pending.version, pending.content)
+      } else if (state.failed && state.failed.version === state.version) {
+        const failed = state.failed
+        state.failed = undefined
+        await enqueue(path, failed.version, failed.content)
+      } else {
+        await state.tail
+      }
+      // An edit can arrive while an older write is in flight. Flush that
+      // version too so explicit Run/Test/Review always sees editor contents.
+      if (state.pending || state.queuedWrites > 0) continue
+      return state.persistedVersion === state.version
     }
-    const pending = state.pending
-    clearTimeout(pending.timer)
-    state.pending = undefined
-    return enqueue(path, pending.version, pending.content)
   }
 
-  async function flushAll(): Promise<void> {
-    await Promise.all(Array.from(states.keys(), path => flushPath(path)))
+  async function flushAll(): Promise<boolean> {
+    for (;;) {
+      const startEpoch = scheduleEpoch
+      const results = await Promise.all(Array.from(states.keys(), path => flushPath(path)))
+      // A brand-new file can be edited while existing writes are in flight.
+      // Re-snapshot the map until no schedule occurred during this flush.
+      if (scheduleEpoch !== startEpoch) continue
+      return results.every(Boolean)
+    }
   }
 
   async function saveNow(path: string, content: string): Promise<boolean> {
@@ -94,7 +124,7 @@ export function createEditorAutosave(options: AutosaveOptions): EditorAutosave {
 
   function hasPendingWrites(): boolean {
     for (const state of states.values()) {
-      if (state.pending || state.queuedWrites > 0) return true
+      if (state.pending || state.failed || state.queuedWrites > 0) return true
     }
     return false
   }

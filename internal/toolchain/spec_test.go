@@ -110,3 +110,20 @@ func TestDedicatedTestFileDetectionAcrossToolchains(t *testing.T) {
 		t.Fatal("source file was classified as a dedicated test")
 	}
 }
+
+func TestTestConfigurationRegistry(t *testing.T) {
+	for _, filename := range []string{
+		"go.mod", "go.work.sum", "Cargo.toml", ".cargo/config.toml",
+		"package.json", "package-lock.json", "tsconfig.test.json", "jest.config.ts",
+		"pyproject.toml", "pytest.ini", "requirements-dev.txt",
+	} {
+		if !IsTestConfigurationFile(filename) {
+			t.Errorf("test configuration not registered: %s", filename)
+		}
+	}
+	for _, filename := range []string{"main.go", "src/index.ts", "notes.md", "quiz.json", ".env"} {
+		if IsTestConfigurationFile(filename) {
+			t.Errorf("ordinary file registered as test configuration: %s", filename)
+		}
+	}
+}

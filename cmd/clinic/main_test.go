@@ -77,3 +77,31 @@ func TestValidateRuntimeConfig(t *testing.T) {
 		t.Fatal("missing service role key accepted")
 	}
 }
+
+func TestReviewRoutesAreRegisteredBehindGroupMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	authenticated := func(c *gin.Context) {
+		if c.GetHeader("X-Test-Auth") != "ok" {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		c.Next()
+	}
+	registerAPIRoutes(router.Group("/api", authenticated))
+
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/review/status"},
+		{http.MethodPost, "/api/review"},
+		{http.MethodPost, "/api/review/cancel"},
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(route.method, route.path, nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s status=%d, want authenticated 401", route.method, route.path, response.Code)
+		}
+	}
+}

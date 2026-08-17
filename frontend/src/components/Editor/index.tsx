@@ -1,8 +1,15 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react'
 import MonacoEditor, { type OnMount, useMonaco } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
-import { useStore } from '../../store'
-import { useProject } from '../../hooks/useProject'
+import { canUseReviewControl, useStore } from '../../store'
+import {
+  applyReviewSnapshot,
+  currentReviewSnapshot,
+  reviewRecoveryFromRequestError,
+  reviewRequestErrorMessage,
+  useProject,
+} from '../../hooks/useProject'
+import type { ReviewRequest } from '../../hooks/useProject'
 import { lspClient } from '../../lib/lspClient'
 import type { Location as LspLocation, LspDiagnostic } from '../../lib/lspClient'
 import type { DiagnosticItem } from '../../store'
@@ -10,7 +17,7 @@ import QuizOverlay from './QuizOverlay'
 import ConceptPanel from './ConceptPanel'
 import './Editor.css'
 import { apiFetch, apiJson } from '../../lib/api'
-import { getErrorMessage } from '../../lib/errors'
+import { getErrorMessage, isAbortError } from '../../lib/errors'
 import { replaceTutorMarkerAtIndex } from './markerRanges'
 import {
   createEditorAutosave,
@@ -18,6 +25,9 @@ import {
   type EditorAutosave,
 } from './autosave'
 import { createTestRunRequest } from './testRun'
+import { shouldCancelReviewOnEdit } from './reviewEditCancellation'
+import { isReviewableSourcePath } from './reviewableSource'
+import { persistQuizCandidate } from './quizSubmission'
 
 type DecorCollection = editor.IEditorDecorationsCollection
 
@@ -170,6 +180,7 @@ async function resolveDefinition(
 // ANSI 색상 코드를 HTML span으로 변환 (최소한: 빨강/초록/리셋)
 const ANSI_ESCAPE = String.fromCharCode(27)
 const ANSI_PATTERN = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, 'g')
+const MAX_REVIEW_TEST_OUTPUT_CHARS = 15_000
 
 function ansiToHtml(text: string): string {
   return text
@@ -267,6 +278,7 @@ export default function Editor() {
     openFile,
     openFileContent,
     openFileReadOnly,
+    workspaceMutationLocked,
     setOpenFileContent,
     setOpenFileReadOnly,
     markFileChanged,
@@ -285,12 +297,24 @@ export default function Editor() {
     setPendingNavigate,
     showMinimap,
     addToast,
+    reviewStatus,
+    reviewRevision,
+    reviewFiles,
+    projectSessionEpoch,
+    failFeedback,
   } = useStore()
   const filename = openFile ? openFile.split('/').pop() || openFile : ''
-  const { writeFile } = useProject()
+  const { writeFile, getReviewStatus, requestReview, cancelReview } = useProject()
   const writeFileRef = useRef(writeFile)
   useEffect(() => { writeFileRef.current = writeFile }, [writeFile])
+  const getReviewStatusRef = useRef(getReviewStatus)
+  useEffect(() => { getReviewStatusRef.current = getReviewStatus }, [getReviewStatus])
+  const requestReviewRef = useRef(requestReview)
+  useEffect(() => { requestReviewRef.current = requestReview }, [requestReview])
+  const cancelReviewRef = useRef(cancelReview)
+  useEffect(() => { cancelReviewRef.current = cancelReview }, [cancelReview])
   const handleTestFuncRef = useRef<(name: string) => void>(() => {})
+  const handleReviewRef = useRef<(request?: ReviewRequest) => void>(() => {})
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const decorationRef = useRef<DecorCollection | null>(null)
   const gitDiffCollectionRef = useRef<DecorCollection | null>(null)
@@ -306,6 +330,11 @@ export default function Editor() {
   const openFileRef = useRef<string | null>(openFile)
   const openFileContentRef = useRef<string>(openFileContent)
   const diagnosticsCacheRef = useRef<Map<string, import('monaco-editor').editor.IMarkerData[]>>(new Map())
+  const reviewStatusAbortRef = useRef<AbortController | null>(null)
+  const reviewActionAbortRef = useRef<AbortController | null>(null)
+  const reviewEditCancelAbortRef = useRef<AbortController | null>(null)
+  const reviewEditCancelRequestedRef = useRef(false)
+  const [reviewAction, setReviewAction] = useState<'start' | 'cancel' | null>(null)
 
   useEffect(() => {
     const autosave = createEditorAutosave({
@@ -315,9 +344,12 @@ export default function Editor() {
       onError: (path, error) => addToast(`${path.split('/').pop() || path} 저장 실패: ${getErrorMessage(error)}`, 'error'),
     })
     autosaveRef.current = autosave
+    const flushEditor = () => autosave.flushAll()
+    useStore.getState().setEditorFlush(flushEditor)
     const removeLifecycleListeners = installEditorAutosaveLifecycle(autosave)
     return () => {
       removeLifecycleListeners()
+      if (useStore.getState().flushEditor === flushEditor) useStore.getState().setEditorFlush(null)
       if (autosaveRef.current === autosave) autosaveRef.current = null
       void autosave.flushAll()
     }
@@ -329,6 +361,33 @@ export default function Editor() {
     openFileRef.current = openFile
   }, [openFile])
   useEffect(() => { openFileContentRef.current = openFileContent }, [openFileContent])
+
+  useEffect(() => {
+    reviewStatusAbortRef.current?.abort()
+    if (!projectStatus?.dir) return
+    const abort = new AbortController()
+    reviewStatusAbortRef.current = abort
+    const expected = currentReviewSnapshot()
+    const expectedSessionEpoch = projectSessionEpoch
+    void getReviewStatusRef.current(abort.signal)
+      .then((snapshot) => {
+        if (useStore.getState().projectSessionEpoch !== expectedSessionEpoch) return false
+        return applyReviewSnapshot(snapshot, 'status', expected)
+      })
+      .catch((error: unknown) => {
+        if (!isAbortError(error)) addToast(`AI 검토 상태 확인 실패: ${getErrorMessage(error)}`, 'error')
+      })
+    return () => {
+      abort.abort()
+      if (reviewStatusAbortRef.current === abort) reviewStatusAbortRef.current = null
+    }
+  }, [addToast, projectSessionEpoch, projectStatus?.dir])
+
+  useEffect(() => {
+    if (reviewStatus === 'requesting' || reviewStatus === 'reviewing') {
+      reviewEditCancelRequestedRef.current = false
+    }
+  }, [reviewStatus, reviewRevision])
 
   // 파일이 열릴 때 캐시된 진단 적용은 handleMount에서 처리
   useEffect(() => {
@@ -857,8 +916,8 @@ export default function Editor() {
 
   // readOnly 변경 시 에디터 옵션 업데이트
   useEffect(() => {
-    editorRef.current?.updateOptions({ readOnly: openFileReadOnly })
-  }, [openFileReadOnly])
+    editorRef.current?.updateOptions({ readOnly: openFileReadOnly || workspaceMutationLocked })
+  }, [openFileReadOnly, workspaceMutationLocked])
 
   // minimap 토글
   useEffect(() => {
@@ -953,12 +1012,20 @@ export default function Editor() {
       const activeRequest = abortRef.current
       abortRef.current = null
       activeRequest?.abort()
+      const reviewRequest = reviewActionAbortRef.current
+      reviewActionAbortRef.current = null
+      reviewRequest?.abort()
+      const editCancellation = reviewEditCancelAbortRef.current
+      reviewEditCancelAbortRef.current = null
+      editCancellation?.abort()
     }
   }, [])
 
   const handleMount: OnMount = useCallback((ed, monaco) => {
     editorRef.current = ed
     setEditorInstance(ed)
+    const mountedStore = useStore.getState()
+    ed.updateOptions({ readOnly: mountedStore.openFileReadOnly || mountedStore.workspaceMutationLocked })
 
     // 초기 모델 생성 및 에디터에 설정
     if (openFileRef.current) {
@@ -983,12 +1050,45 @@ export default function Editor() {
     ed.onDidChangeModelContent(() => {
       const content = ed.getValue()
       setOpenFileContent(content)
+      if (useStore.getState().workspaceMutationLocked) return
       const filePath = openFileRef.current
       if (!filePath) return
       markFileChanged(filePath)
       const store = useStore.getState()
+      const waitsForSemanticSync = isReviewableSourcePath(filePath, useStore.getState().projectStatus?.dir)
+      if (waitsForSemanticSync) {
+        store.setPendingSemanticSync(true)
+      }
+      // A delayed sync acknowledgement can belong to the previous save. Clear
+      // completion evidence synchronously so an edit can never advance using
+      // an older test result, even when the edit is later classified as
+      // whitespace-only by the backend.
       store.setStepComplete(false)
       store.setTestResult(null)
+      store.setReviewTestStatus('not_run')
+      if (waitsForSemanticSync && shouldCancelReviewOnEdit(store.reviewStatus, reviewEditCancelRequestedRef.current)) {
+        reviewEditCancelRequestedRef.current = true
+        const revision = store.activeReviewRevision ?? undefined
+        const requestID = store.reviewRequestID ?? undefined
+        store.cancelFeedback(revision)
+        reviewEditCancelAbortRef.current?.abort()
+        const cancelAbort = new AbortController()
+        reviewEditCancelAbortRef.current = cancelAbort
+        void cancelReviewRef.current(cancelAbort.signal, requestID)
+          .then((snapshot) => {
+            if (reviewEditCancelRequestedRef.current) applyReviewSnapshot(snapshot)
+          })
+          .catch((error: unknown) => {
+            if (!isAbortError(error)) {
+              const message = getErrorMessage(error)
+              useStore.getState().failFeedback(message, revision)
+              useStore.getState().addToast(`AI 검토 중단 실패: ${message}`, 'error')
+            }
+          })
+          .finally(() => {
+            if (reviewEditCancelAbortRef.current === cancelAbort) reviewEditCancelAbortRef.current = null
+          })
+      }
       lspClient.notifyChange(filePath, content)
       autosaveRef.current?.schedule(filePath, content)
     })
@@ -1002,6 +1102,11 @@ export default function Editor() {
         const saved = await autosaveRef.current?.saveNow(filePath, content)
         if (saved) lspClient.notifySave(filePath)
       }
+    })
+
+    // Explicit AI review. Autosave is intentionally independent from review.
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+      handleReviewRef.current()
     })
 
     // F12 → go to definition (cross-file 이동 처리)
@@ -1045,23 +1150,35 @@ export default function Editor() {
     outputEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [runOutput])
 
-  async function handleQuizSolve(key: string, correctCode: string, markerType: string, markerIndex: number) {
+  async function handleQuizSolve(key: string, correctCode: string, markerType: string, markerIndex: number): Promise<boolean> {
+    const targetPath = openFile
+    const originalContent = openFileContent
     const newContent = replaceTutorMarkerAtIndex(
-      openFileContent,
+      originalContent,
       markerType === 'bug' ? 'bug' : 'hole',
       markerIndex,
       correctCode,
     )
-    if (newContent === openFileContent) {
+    if (newContent === originalContent) {
       addToast('과제 마커 범위를 찾지 못해 코드를 적용하지 않았습니다.', 'error')
-      return
+      return false
     }
-    setOpenFileContent(newContent)
-    if (openFile && await autosaveRef.current?.saveNow(openFile, newContent)) markHoleSolved(key)
+    if (!targetPath) return false
+    return persistQuizCandidate(
+      async () => await autosaveRef.current?.saveNow(targetPath, newContent) === true,
+      () => {
+        useStore.getState().updateTabContent(targetPath, newContent)
+        markHoleSolved(key)
+      },
+      () => useStore.getState().openTabs.find((tab) => tab.path === targetPath)?.content === originalContent,
+    )
   }
 
   async function streamOutput(endpoint: string, title: string, setActive: (v: boolean) => void) {
     if (!mountedRef.current) return
+    const isTestRun = endpoint.startsWith('/api/test')
+    const collectedOutput: string[] = []
+    if (isTestRun) useStore.getState().setTestOutput('')
     setActive(true)
     setRunOutput([])
     setOutputTitle(title)
@@ -1073,7 +1190,9 @@ export default function Editor() {
 
     try {
       // Run and test the latest editor contents, not the last debounce snapshot.
-      await autosaveRef.current?.flushAll()
+      if (!autosaveRef.current || !await autosaveRef.current.flushAll()) {
+        throw new Error('최신 코드를 저장하지 못해 실행을 시작하지 않았습니다.')
+      }
       if (abort.signal.aborted) return
       const response = await apiFetch(endpoint, { signal: abort.signal })
       if (!response.body) throw new Error('실행 스트림 응답이 비어 있습니다.')
@@ -1099,7 +1218,9 @@ export default function Editor() {
           }
           const match = chunk.match(/^data: (.*)$/m)
           if (match) {
-            setRunOutput((prev) => [...prev, match[1]])
+            const line = match[1]
+            if (isTestRun) collectedOutput.push(line.replace(ANSI_PATTERN, ''))
+            setRunOutput((prev) => [...prev, line])
           }
         }
       }
@@ -1109,7 +1230,12 @@ export default function Editor() {
       }
     } finally {
       if (abortRef.current === abort) abortRef.current = null
-      if (mountedRef.current) setActive(false)
+      if (mountedRef.current) {
+        if (isTestRun) {
+          useStore.getState().setTestOutput(collectedOutput.join('\n').slice(-MAX_REVIEW_TEST_OUTPUT_CHARS))
+        }
+        setActive(false)
+      }
     }
   }
 
@@ -1128,7 +1254,72 @@ export default function Editor() {
     await streamOutput(request.endpoint, request.title, setIsTesting)
   }
 
+  async function handleManualReview(request: ReviewRequest = {}) {
+    if (reviewAction || !projectStatus?.loaded) return
+
+    const isActive = reviewStatus === 'requesting' || reviewStatus === 'reviewing'
+    if (!canUseReviewControl(reviewStatus)) {
+      addToast('검토할 의미 있는 코드 변경이 없습니다.', 'info')
+      return
+    }
+
+    const abort = new AbortController()
+    reviewActionAbortRef.current?.abort()
+    reviewActionAbortRef.current = abort
+    setReviewAction(isActive ? 'cancel' : 'start')
+
+    try {
+      if (isActive) {
+        const snapshot = await cancelReviewRef.current(abort.signal)
+        applyReviewSnapshot(snapshot)
+        addToast('AI 검토를 중단했습니다.', 'info')
+        return
+      }
+
+      if (!autosaveRef.current || !await autosaveRef.current.flushAll()) {
+        throw new Error('최신 코드를 저장하지 못해 AI 검토를 시작하지 않았습니다.')
+      }
+      if (abort.signal.aborted) return
+      const latest = useStore.getState()
+      if (!latest.claimReviewRequest()) {
+        addToast(
+          latest.reviewStatus === 'requesting' || latest.reviewStatus === 'reviewing'
+            ? '이미 AI 검토 요청을 처리하고 있습니다.'
+            : '검토할 의미 있는 코드 변경이 없습니다.',
+          'info',
+        )
+        return
+      }
+      // revision/hash를 생략하면 clinic이 debounce를 기다리지 않고 최신 소스를 동기화한다.
+      const snapshot = await requestReviewRef.current(request, abort.signal)
+      applyReviewSnapshot(snapshot, 'start')
+    } catch (error: unknown) {
+      if (isAbortError(error)) return
+      const recovery = reviewRecoveryFromRequestError(error)
+      if (recovery) {
+        applyReviewSnapshot(recovery.snapshot)
+        const message = reviewRequestErrorMessage(error)
+        addToast(
+          recovery.code === 'review_stale'
+            ? '코드가 바뀌어 최신 revision으로 갱신했습니다. AI 검토를 다시 눌러 주세요.'
+            : message,
+          recovery.code === 'review_rate_limited' ? 'error' : 'info',
+        )
+        return
+      }
+      const message = reviewRequestErrorMessage(error)
+      failFeedback(message)
+      addToast(`AI 검토 요청 실패: ${message}`, 'error')
+    } finally {
+      if (reviewActionAbortRef.current === abort) {
+        reviewActionAbortRef.current = null
+        setReviewAction(null)
+      }
+    }
+  }
+
   handleTestFuncRef.current = (funcName: string) => { void handleTest(funcName) }
+  handleReviewRef.current = (request?: ReviewRequest) => { void handleManualReview(request) }
 
   const activeLanguageServer = openFile ? LSP_SERVER_MAP[detectLanguage(openFile)] : undefined
   const lspStatusTitle = lspReady
@@ -1136,6 +1327,16 @@ export default function Editor() {
     : activeLanguageServer
       ? `LSP 미연결 (${activeLanguageServer} 및 clinic 연결 확인)`
       : 'LSP 미연결 (언어 서버 및 clinic 연결 확인)'
+  const reviewBusy = reviewStatus === 'requesting' || reviewStatus === 'reviewing'
+  const reviewCanStart = canUseReviewControl(reviewStatus) && !reviewBusy
+  const reviewFileLabel = reviewFiles.length > 0
+    ? `${reviewFiles[0]}${reviewFiles.length > 1 ? ` 외 ${reviewFiles.length - 1}개` : ''}`
+    : '변경 파일 없음'
+  const reviewStatusTitle = reviewStatus === 'ready'
+    ? `검토 준비됨 · r${reviewRevision} · ${reviewFileLabel}`
+    : reviewBusy
+      ? `검토 중 · r${reviewRevision} · ${reviewFileLabel}`
+      : '의미 있는 코드 변경이 감지되면 AI 검토를 시작할 수 있습니다.'
 
   return (
     <div className="editor-container">
@@ -1165,6 +1366,19 @@ export default function Editor() {
           })}
         </div>
         <div className="editor-tab-actions">
+          <button
+            type="button"
+            className={`review-btn review-${reviewStatus}`}
+            onClick={() => { void handleManualReview() }}
+            disabled={!projectStatus?.loaded || reviewAction !== null || (!reviewBusy && !reviewCanStart)}
+            title={`${reviewStatusTitle} (⌘/Ctrl+Enter)`}
+            aria-keyshortcuts="Control+Enter Meta+Enter"
+          >
+            {reviewAction
+              ? reviewAction === 'cancel' ? '중단 중…' : '요청 중…'
+              : reviewBusy ? '■ 검토 중단' : reviewCanStart ? '✦ AI 검토' : '변경 없음'}
+            {reviewStatus === 'ready' && <span className="review-ready-dot" aria-label="검토 준비됨" />}
+          </button>
           <button
             className={`run-btn ${isRunning ? 'running' : ''}`}
             onClick={isRunning ? handleStop : () => { void handleRun() }}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/coding-tutor/internal/config"
 	"github.com/coding-tutor/internal/project"
+	"github.com/coding-tutor/internal/watcher"
 	"github.com/gin-gonic/gin"
 )
 
@@ -112,15 +113,18 @@ func TestPublishExplicitTestResultCompletesOnlyFullSuite(t *testing.T) {
 	defer func() { config.Global.BaseDir = oldBaseDir }()
 
 	oldTestResult := broadcastTestResult
+	oldScopedTestResult := broadcastScopedTestResult
 	oldStepComplete := broadcastStepComplete
 	defer func() {
 		broadcastTestResult = oldTestResult
+		broadcastScopedTestResult = oldScopedTestResult
 		broadcastStepComplete = oldStepComplete
 	}()
 
 	var testResults []bool
 	var completions []bool
 	var projectDirs []string
+	var scopes []string
 	broadcastTestResult = func(projectDir string, passed bool, _ string) {
 		projectDirs = append(projectDirs, projectDir)
 		testResults = append(testResults, passed)
@@ -129,6 +133,11 @@ func TestPublishExplicitTestResultCompletesOnlyFullSuite(t *testing.T) {
 		projectDirs = append(projectDirs, projectDir)
 		completions = append(completions, passed)
 	}
+	broadcastScopedTestResult = func(projectDir string, passed bool, _ string, scope string) {
+		projectDirs = append(projectDirs, projectDir)
+		testResults = append(testResults, passed)
+		scopes = append(scopes, scope)
+	}
 
 	publishExplicitTestResult("TestOne", projectDir, true, "targeted pass")
 	if len(testResults) != 1 || !testResults[0] {
@@ -136,6 +145,9 @@ func TestPublishExplicitTestResultCompletesOnlyFullSuite(t *testing.T) {
 	}
 	if len(completions) != 0 {
 		t.Fatalf("targeted test completed the step: %#v", completions)
+	}
+	if len(scopes) != 1 || scopes[0] != "targeted" {
+		t.Fatalf("targeted scopes = %#v", scopes)
 	}
 
 	publishExplicitTestResult("", projectDir, true, "suite pass")
@@ -154,6 +166,63 @@ func TestPublishExplicitTestResultCompletesOnlyFullSuite(t *testing.T) {
 		if got != projectDir {
 			t.Fatalf("broadcast project dir = %q, want %q", got, projectDir)
 		}
+	}
+}
+
+func TestManualTestResultIsDroppedAfterInputChange(t *testing.T) {
+	oldBaseDir := config.Global.BaseDir
+	oldProject := project.Global
+	baseDir := t.TempDir()
+	projectDir := filepath.Join(baseDir, "project")
+	if err := os.Mkdir(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(projectDir, "main.go")
+	if err := os.WriteFile(sourcePath, []byte("package main\nvar value = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config.Global.BaseDir = baseDir
+	project.Global = &project.Manager{}
+	project.Global.Set(projectDir, "## 언어 & 환경\ngo\n")
+	if err := watcher.Start(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if watcher.Global != nil {
+			watcher.Global.Stop()
+			watcher.Global = nil
+		}
+		project.Global = oldProject
+		config.Global.BaseDir = oldBaseDir
+	})
+
+	version, err := watcher.CaptureTestInputVersion(projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("package main\nvar value = 1\n// [TUTOR:HOLE]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := watcher.Global.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	oldTestResult := broadcastTestResult
+	oldStepComplete := broadcastStepComplete
+	t.Cleanup(func() {
+		broadcastTestResult = oldTestResult
+		broadcastStepComplete = oldStepComplete
+	})
+	resultCalls := 0
+	completionCalls := 0
+	broadcastTestResult = func(string, bool, string) { resultCalls++ }
+	broadcastStepComplete = func(string, bool) { completionCalls++ }
+
+	if summary, published := publishExplicitTestResultIfCurrent(version, "", projectDir, true, "old suite passed"); published || summary != "" {
+		t.Fatalf("stale result = (%q, %t), want dropped", summary, published)
+	}
+	if resultCalls != 0 || completionCalls != 0 {
+		t.Fatalf("stale broadcasts = test:%d completion:%d", resultCalls, completionCalls)
 	}
 }
 
@@ -181,8 +250,10 @@ func TestRunTestBroadcastsSuccessAndFailure(t *testing.T) {
 
 	oldTestResult := broadcastTestResult
 	oldStepComplete := broadcastStepComplete
+	oldTestResultWithInput := broadcastTestResultWithInput
 	defer func() {
 		broadcastTestResult = oldTestResult
+		broadcastTestResultWithInput = oldTestResultWithInput
 		broadcastStepComplete = oldStepComplete
 	}()
 
@@ -210,10 +281,12 @@ func TestRunTestBroadcastsSuccessAndFailure(t *testing.T) {
 			var gotSummary []string
 			var gotComplete []bool
 			var gotProjectDirs []string
-			broadcastTestResult = func(projectDir string, passed bool, summary string) {
+			var gotInputHashes []string
+			broadcastTestResultWithInput = func(projectDir string, passed bool, summary, inputHash string) {
 				gotProjectDirs = append(gotProjectDirs, projectDir)
 				gotResult = append(gotResult, passed)
 				gotSummary = append(gotSummary, summary)
+				gotInputHashes = append(gotInputHashes, inputHash)
 			}
 			broadcastStepComplete = func(projectDir string, passed bool) {
 				gotProjectDirs = append(gotProjectDirs, projectDir)
@@ -233,6 +306,9 @@ func TestRunTestBroadcastsSuccessAndFailure(t *testing.T) {
 			}
 			if len(gotComplete) != 1 || gotComplete[0] != tt.wantComplete {
 				t.Fatalf("step_complete broadcasts = %#v, want %v", gotComplete, tt.wantComplete)
+			}
+			if len(gotInputHashes) != 1 || gotInputHashes[0] == "" {
+				t.Fatalf("test input hashes = %#v", gotInputHashes)
 			}
 			for _, got := range gotProjectDirs {
 				if got != resolvedRoot {

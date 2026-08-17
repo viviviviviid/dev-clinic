@@ -316,7 +316,7 @@ func LoadProject(c *gin.Context) {
 		return
 	}
 
-	if err := watcher.Start(req.Dir); err != nil {
+	if err := watcher.EnsureStarted(req.Dir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "watcher: " + err.Error()})
 		return
 	}

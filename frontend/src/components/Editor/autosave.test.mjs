@@ -66,6 +66,73 @@ test('reports write failures without marking the file saved', async () => {
   assert.equal(ok, false)
   assert.deepEqual(saved, [])
   assert.deepEqual(errors, [{ path: '/project/main.go', message: 'disk full' }])
+  assert.equal(await autosave.flushAll(), false)
+})
+
+test('flushAll reports a failed pending write', async () => {
+  const autosave = createEditorAutosave({
+    delayMs: 1000,
+    write: async (path) => {
+      if (path.endsWith('bad.ts')) throw new Error('disk full')
+    },
+    onSaved: () => {},
+    onError: () => {},
+  })
+  autosave.schedule('/project/good.ts', 'good')
+  autosave.schedule('/project/bad.ts', 'bad')
+  assert.equal(await autosave.flushAll(), false)
+})
+
+test('an explicit flush retries the latest content after a transient write failure', async () => {
+  let attempts = 0
+  const autosave = createEditorAutosave({
+    delayMs: 1000,
+    write: async () => {
+      attempts += 1
+      if (attempts === 1) throw new Error('clinic disconnected')
+    },
+    onSaved: () => {},
+    onError: () => {},
+  })
+
+  assert.equal(await autosave.saveNow('/project/main.ts', 'latest'), false)
+  assert.equal(autosave.hasPendingWrites(), true)
+  assert.equal(await autosave.flushAll(), true)
+  assert.equal(attempts, 2)
+  assert.equal(autosave.hasPendingWrites(), false)
+})
+
+test('flushAll includes a newly edited file that appears while another write is in flight', async () => {
+  let releaseFirst
+  let firstStarted
+  const started = new Promise(resolve => { firstStarted = resolve })
+  const blocked = new Promise(resolve => { releaseFirst = resolve })
+  const writes = []
+  const autosave = createEditorAutosave({
+    delayMs: 1000,
+    write: async (path, content) => {
+      writes.push({ path, content })
+      if (path.endsWith('a.ts')) {
+        firstStarted()
+        await blocked
+      }
+    },
+    onSaved: () => {},
+    onError: () => assert.fail('unexpected save error'),
+  })
+
+  autosave.schedule('/project/a.ts', 'A')
+  const flushing = autosave.flushAll()
+  await started
+  autosave.schedule('/project/b.ts', 'B')
+  releaseFirst()
+
+  assert.equal(await flushing, true)
+  assert.deepEqual(writes, [
+    { path: '/project/a.ts', content: 'A' },
+    { path: '/project/b.ts', content: 'B' },
+  ])
+  assert.equal(autosave.hasPendingWrites(), false)
 })
 
 test('tracks pending and in-flight writes until the serialized write settles', async () => {
