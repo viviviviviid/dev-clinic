@@ -186,11 +186,28 @@ func ValidateToken(tokenString string) (string, error) {
 	if !ok || strings.TrimSpace(userID) == "" {
 		return "", errors.New("missing token subject")
 	}
-	if allowedUserID := strings.TrimSpace(os.Getenv("ALLOWED_USER_ID")); allowedUserID != "" && userID != allowedUserID {
+	if !isAllowedUser(userID) {
 		return "", errors.New("token subject is not allowed")
 	}
 
 	return userID, nil
+}
+
+func isAllowedUser(userID string) bool {
+	configured := false
+	for _, allowedUserID := range []string{os.Getenv("ALLOWED_USER_ID"), os.Getenv("ALLOWED_USER_IDS")} {
+		if strings.TrimSpace(allowedUserID) != "" {
+			configured = true
+		}
+		for _, candidate := range strings.FieldsFunc(allowedUserID, func(r rune) bool {
+			return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		}) {
+			if candidate == userID {
+				return true
+			}
+		}
+	}
+	return !configured
 }
 
 func Auth() gin.HandlerFunc {

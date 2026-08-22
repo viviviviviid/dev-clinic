@@ -103,7 +103,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 혼자만 쓰도록 계정을 고정하려면 clinic 실행 환경에 Supabase 사용자 UUID를 지정합니다.
 
 ```bash
-ALLOWED_USER_ID=your-user-uuid ./bin/clinic ~/learning
+ALLOWED_USER_IDS=first-user-uuid,second-user-uuid ./bin/clinic ~/learning
 ```
 
 ## Supabase 스키마
@@ -160,7 +160,7 @@ create policy "daily missions are private" on daily_missions
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 ```
 
-Supabase Authentication의 URL Configuration에서 Vercel production URL을 Site URL과 Redirect URLs에 등록하세요. 혼자 쓰는 설치는 사용할 이메일 계정을 먼저 만든 뒤 신규 가입을 비활성화하고, 해당 사용자 UUID를 `ALLOWED_USER_ID`로 고정합니다.
+Supabase Authentication의 URL Configuration에서 Vercel production URL을 Site URL과 Redirect URLs에 등록하세요. 혼자 쓰는 설치는 사용할 이메일 계정을 먼저 만든 뒤 신규 가입을 비활성화하고, 허용할 사용자 UUID를 쉼표로 구분한 `ALLOWED_USER_IDS`로 고정합니다. 기존 단일 사용자용 `ALLOWED_USER_ID`도 계속 지원합니다.
 
 ## 개발과 빌드
 

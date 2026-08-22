@@ -19,6 +19,7 @@ func configureAuthTest(t *testing.T) {
 	config.Global.Supabase.URL = "https://project.supabase.co"
 	config.Global.Supabase.JWTSecret = testJWTSecret
 	t.Setenv("ALLOWED_USER_ID", "")
+	t.Setenv("ALLOWED_USER_IDS", "")
 	t.Cleanup(func() { *config.Global = previous })
 }
 
@@ -84,6 +85,30 @@ func TestValidateTokenHonorsAllowedUser(t *testing.T) {
 
 	if _, err := ValidateToken(signedTestToken(t, nil)); err == nil {
 		t.Fatal("ValidateToken() accepted a different user")
+	}
+}
+
+func TestValidateTokenHonorsAllowedUsers(t *testing.T) {
+	configureAuthTest(t)
+	t.Setenv("ALLOWED_USER_IDS", "another-user, user-123")
+
+	if _, err := ValidateToken(signedTestToken(t, nil)); err != nil {
+		t.Fatalf("ValidateToken() rejected an allowed user: %v", err)
+	}
+
+	if _, err := ValidateToken(signedTestToken(t, func(claims jwt.MapClaims) {
+		claims["sub"] = "unlisted-user"
+	})); err == nil {
+		t.Fatal("ValidateToken() accepted an unlisted user")
+	}
+}
+
+func TestValidateTokenRejectsMalformedAllowedUsers(t *testing.T) {
+	configureAuthTest(t)
+	t.Setenv("ALLOWED_USER_IDS", ", ;")
+
+	if _, err := ValidateToken(signedTestToken(t, nil)); err == nil {
+		t.Fatal("ValidateToken() treated a malformed non-empty allowlist as unrestricted")
 	}
 }
 
