@@ -452,9 +452,19 @@ func FinalizeDailyMission(c *gin.Context) {
 }
 
 type NurseChatReq struct {
-	Message    string                `json:"message"`
-	History    []ai.NurseChatMessage `json:"history"`
-	PastTopics []string              `json:"pastTopics"`
+	Message             string                `json:"message"`
+	History             []ai.NurseChatMessage `json:"history"`
+	PastTopics          []string              `json:"pastTopics"`
+	RecommendationsOnly bool                  `json:"recommendationsOnly"`
+}
+
+func isNurseRecommendationRequest(req NurseChatReq) bool {
+	if req.RecommendationsOnly {
+		return true
+	}
+	// Backward compatibility for a deployed frontend that used this greeting
+	// as the recommendation-button sentinel before the explicit intent field.
+	return len(req.History) == 0 && req.Message == "안녕하세요! 오늘 어떤 훈련을 할까요?"
 }
 
 func writeSSEEvent(w io.Writer, event string, data interface{}) error {
@@ -545,11 +555,26 @@ func NurseChatHandler(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	reply, err := ai.Global.GenerateNurseReply(
-		c.Request.Context(),
-		req.Message, req.History, req.PastTopics,
-		settings[0].Language, settings[0].SkillLevel,
-	)
+	var reply ai.NurseReply
+	var err error
+	if isNurseRecommendationRequest(req) {
+		var topics []ai.TopicSuggestion
+		topics, err = ai.Global.GenerateDailyTopics(
+			c.Request.Context(), settings[0].Language, settings[0].SkillLevel, req.PastTopics,
+		)
+		if err == nil {
+			reply = ai.NurseReply{
+				Message: "바로 시작할 수 있는 주제 3개를 준비했어요. 난이도를 보고 하나를 골라 주세요.",
+				Topics:  topics,
+			}
+		}
+	} else {
+		reply, err = ai.Global.GenerateNurseReply(
+			c.Request.Context(),
+			req.Message, req.History, req.PastTopics,
+			settings[0].Language, settings[0].SkillLevel,
+		)
+	}
 	if err != nil {
 		log.Printf("daily: nurse reply failed: %v", err)
 		reply = ai.NurseReply{Message: "죄송해요, 지금은 대화가 어려워요. 잠시 후 다시 시도해 주세요.", Topics: []ai.TopicSuggestion{}}

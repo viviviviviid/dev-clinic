@@ -523,3 +523,18 @@ func TestWriteNurseReplyEventsPreservesLiteralTopicsMarker(t *testing.T) {
 		t.Fatalf("message = %q, want %q", payload.Text, message)
 	}
 }
+
+func TestIsNurseRecommendationRequest(t *testing.T) {
+	if !isNurseRecommendationRequest(NurseChatReq{RecommendationsOnly: true, Message: "추천"}) {
+		t.Fatal("explicit recommendation request was not recognized")
+	}
+	if !isNurseRecommendationRequest(NurseChatReq{Message: "안녕하세요! 오늘 어떤 훈련을 할까요?"}) {
+		t.Fatal("legacy recommendation request was not recognized")
+	}
+	if isNurseRecommendationRequest(NurseChatReq{
+		Message: "안녕하세요! 오늘 어떤 훈련을 할까요?",
+		History: []ai.NurseChatMessage{{Role: "user", Content: "대화 중"}},
+	}) {
+		t.Fatal("conversation greeting was mistaken for recommendation intent")
+	}
+}

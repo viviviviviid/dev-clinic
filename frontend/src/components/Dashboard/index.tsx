@@ -230,10 +230,11 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
 
     try {
       const stream = await nurseChat(
-        isInit ? '안녕하세요! 오늘 어떤 훈련을 할까요?' : userMsg,
+        isInit ? '오늘 연습할 새 주제 3개를 추천해 주세요.' : userMsg,
         histForApi,
         pastTopics,
         abort.signal,
+        isInit,
       )
       let nurseReply = ''
       setNurseChatHistory([...newHistory, { role: 'nurse', content: '' }])

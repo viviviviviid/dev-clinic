@@ -12,8 +12,9 @@ import (
 )
 
 type Client struct {
-	client *genai.Client
-	codex  *codexBackend
+	client                 *genai.Client
+	codex                  *codexBackend
+	generateStructuredHook func(context.Context, string, string, map[string]any) (string, error)
 }
 
 var Global *Client
@@ -120,6 +121,9 @@ func (c *Client) generateWithSystem(ctx context.Context, system, prompt string) 
 }
 
 func (c *Client) generateStructured(ctx context.Context, system, prompt string, schema map[string]any) (string, error) {
+	if c.generateStructuredHook != nil {
+		return c.generateStructuredHook(ctx, system, prompt, schema)
+	}
 	ctx, cancel := withGenerationTimeout(ctx)
 	defer cancel()
 	if c.codex != nil {
@@ -331,6 +335,7 @@ func (c *Client) GenerateCodeFiles(ctx context.Context, tutorContent string, exi
 - marker 범위는 정확히 1:1로 닫고 중첩하거나 겹치지 마세요. 범위 밖의 시그니처와 주변 코드는 marker가 남아 있는 초기 상태에서도 컴파일되어야 합니다.
 - BUG는 실제 호출 경로의 컴파일 가능한 논리 오류여야 합니다.
 - 각 마커에는 수정 전 실패하고 올바른 구현 후 통과하는 결정적 테스트가 있어야 합니다.
+- 테스트 파일에는 [TUTOR:HOLE], [TUTOR:BUG], [TUTOR:END]를 포함하지 마세요. 테스트는 완성된 정답 동작만 검증하고 학습자가 직접 수정하는 범위가 아닙니다.
 - TUTORSYS.md와 quiz.json은 생성하지 마세요. clinic이 별도로 관리합니다.
 - 모든 필요한 파일을 files 배열에 담고 JSON 외 텍스트를 출력하지 마세요.
 
@@ -338,10 +343,31 @@ func (c *Client) GenerateCodeFiles(ctx context.Context, tutorContent string, exi
 
 %s`, contract.comment, contract.comment, contract.instructions, data)
 
-	text, err := c.generateStructured(ctx, codeFilesSystemPrompt, prompt, codeFilesSchema())
-	if err != nil {
-		return nil, err
+	var validationErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		attemptPrompt := prompt
+		if validationErr != nil {
+			attemptPrompt += fmt.Sprintf(`
+
+직전 생성 결과가 clinic 계약 검증에 실패했습니다.
+검증 오류: %s
+오류를 정확히 고쳐 전체 files JSON을 처음부터 다시 생성하세요. 검증을 우회하거나 필요한 테스트를 삭제하지 마세요.`, validationErr)
+		}
+
+		text, err := c.generateStructured(ctx, codeFilesSystemPrompt, attemptPrompt, codeFilesSchema())
+		if err != nil {
+			return nil, err
+		}
+		generated, err := decodeAndValidateGeneratedProject(text, contract, existingFiles)
+		if err == nil {
+			return generated, nil
+		}
+		validationErr = err
 	}
+	return nil, fmt.Errorf("code generation failed contract validation after one correction: %w", validationErr)
+}
+
+func decodeAndValidateGeneratedProject(text string, contract tutoringLanguageContract, existingFiles map[string]string) (map[string]string, error) {
 	var response codeFilesResponse
 	if err := decodeStrictJSON(text, &response); err != nil {
 		return nil, fmt.Errorf("code files JSON parse error: %w", err)

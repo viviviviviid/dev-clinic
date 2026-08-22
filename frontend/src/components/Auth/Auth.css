@@ -79,6 +79,18 @@
   overflow-wrap: anywhere;
 }
 
+.auth-success {
+  width: 100%;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(63, 185, 80, 0.42);
+  border-radius: 8px;
+  background: rgba(63, 185, 80, 0.08);
+  color: #7ee787;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .auth-feature {
   display: flex;
   align-items: center;
@@ -91,7 +103,40 @@
   font-size: 16px;
 }
 
-.auth-google-btn {
+.auth-email-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.auth-email-label {
+  color: #c9d1d9;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.auth-email-input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  background: #0d1117;
+  color: #e6edf3;
+  font: inherit;
+}
+
+.auth-email-input::placeholder {
+  color: #6e7681;
+}
+
+.auth-email-input:focus-visible {
+  border-color: #58a6ff;
+  outline: 3px solid rgba(88, 166, 255, 0.25);
+  outline-offset: 1px;
+}
+
+.auth-email-btn {
   margin-top: 8px;
   width: 100%;
   display: flex;
@@ -109,22 +154,18 @@
   transition: opacity 0.15s;
 }
 
-.auth-google-btn:hover {
+.auth-email-btn:hover {
   opacity: 0.9;
 }
 
-.auth-google-btn:focus-visible {
+.auth-email-btn:focus-visible {
   outline: 3px solid rgba(88, 166, 255, 0.55);
   outline-offset: 3px;
 }
 
-.auth-google-btn:disabled {
+.auth-email-btn:disabled {
   cursor: wait;
   opacity: 0.7;
-}
-
-.google-icon {
-  flex-shrink: 0;
 }
 
 @media (max-width: 420px) {

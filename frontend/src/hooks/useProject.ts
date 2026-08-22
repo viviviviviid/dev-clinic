@@ -713,10 +713,11 @@ export function useProject() {
     history: { role: string; content: string }[],
     pastTopics: string[],
     signal?: AbortSignal,
+    recommendationsOnly = false,
   ): Promise<ReadableStream<Uint8Array>> {
     const response = await apiFetch('/api/daily/nurse-chat', {
       method: 'POST',
-      body: JSON.stringify({ message, history, pastTopics }),
+      body: JSON.stringify({ message, history, pastTopics, recommendationsOnly }),
       signal,
     })
     return requireStream(response)

@@ -6,7 +6,7 @@
 
 ```text
 Vercel (frontend/dist)
-  ├─ Supabase Auth: Google 로그인
+  ├─ Supabase Auth: 이메일 매직링크 로그인
   └─ HTTPS → http/ws://127.0.0.1:47291
                   clinic
                   ├─ Codex CLI 또는 Gemini
@@ -43,7 +43,7 @@ model = "gemini-3.6-flash"
 - Go 1.25+
 - Node.js 24 LTS 및 npm
 - Codex CLI와 ChatGPT 로그인(기본 모드)
-- Supabase 프로젝트(Google Auth, 설정·미션 DB)
+- Supabase 프로젝트(Email Auth, 설정·미션 DB)
 - Chrome 권장: 최초 접속 시 로컬 네트워크 권한을 허용해야 합니다.
 
 학습 프로젝트를 실행·테스트할 언어 도구도 Mac에 미리 설치해야 합니다. clinic은 패키지를 자동 설치하지 않으며 Node 도구는 `npx --no-install`로만 실행합니다.
@@ -160,7 +160,7 @@ create policy "daily missions are private" on daily_missions
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 ```
 
-Supabase Authentication에서 Google provider를 활성화하고 Vercel production URL을 허용된 redirect URL로 등록하세요.
+Supabase Authentication의 URL Configuration에서 Vercel production URL을 Site URL과 Redirect URLs에 등록하세요. 혼자 쓰는 설치는 사용할 이메일 계정을 먼저 만든 뒤 신규 가입을 비활성화하고, 해당 사용자 UUID를 `ALLOWED_USER_ID`로 고정합니다.
 
 ## 개발과 빌드
 
