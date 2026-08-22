@@ -3,11 +3,12 @@ import { MissionFinalizePendingError, useProject } from '../../hooks/useProject'
 import type { PendingMissionFinalize, TopicSuggestion } from '../../hooks/useProject'
 import { useStore } from '../../store'
 import { getErrorMessage, isAbortError } from '../../lib/errors'
-import { writePreference } from '../../lib/storage'
+import { readPreference, writePreference } from '../../lib/storage'
 import { NurseSseParser } from './nurseSse'
 import {
   MIN_EDITOR_WIDTH,
   clearPendingMissionFinalize,
+  dailyIntroStorageKey,
   describeMissionGeneration,
   isEditorWidthReady,
   readPendingMissionFinalize,
@@ -75,6 +76,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   } = useProject()
   const { userSettings, addToast } = useStore()
   const finalizeStorageKey = missionFinalizeStorageKey(userSettings?.user_id ?? 'unknown')
+  const introStorageKey = dailyIntroStorageKey(userSettings?.user_id ?? 'unknown')
 
   const today = new Date()
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
@@ -128,7 +130,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   const missionCreationRef = useRef<AbortController | null>(null)
   const scheduledTimeoutsRef = useRef<Set<number>>(new Set())
   const mountedRef = useRef(true)
-  const startupRef = useRef({ isTestMode, testScenarios, getDailyMission, getDailyHistory, today, todayStr })
+  const startupRef = useRef({ isTestMode, testScenarios, getDailyMission, getDailyHistory, today, todayStr, introStorageKey })
   const selectMissionRef = useRef<(mission: MissionRecord) => void>(() => undefined)
   const sendNurseMessageRef = useRef<(message: string, history: NurseChatMsg[]) => void>(() => undefined)
 
@@ -189,6 +191,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   }
 
   function finishVnIntro() {
+    if (!testModeActive) writePreference(introStorageKey, todayStr)
     setVnFading(true)
     schedule(() => {
       setVnVisible(false)
@@ -449,6 +452,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       getDailyHistory: fetchDailyHistory,
       today: initialToday,
       todayStr: initialTodayStr,
+      introStorageKey: initialIntroStorageKey,
     } = startupRef.current
 
     // 테스트 모드: 바로 첫 시나리오 표시
@@ -480,6 +484,12 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           if (!seen.has(m.topic)) { seen.add(m.topic); past.push(m.topic) }
         }
         setPastTopics(past)
+
+        if (readPreference(initialIntroStorageKey) === initialTodayStr) {
+          setVnVisible(false)
+          writePreference('lastAccessDate', initialTodayStr)
+          return
+        }
 
         // 마지막 접속 날짜 확인
         const lastAccessDate = readLastAccessDate()

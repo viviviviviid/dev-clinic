@@ -1,5 +1,9 @@
 export const MIN_EDITOR_WIDTH = 680
 
+export function dailyIntroStorageKey(userID: string): string {
+  return `coding-tutor.daily-intro.${userID}`
+}
+
 export interface PendingMissionFinalizeRecord {
   topic: string
   slug: string

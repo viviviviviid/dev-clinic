@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { readClampedNumber, writePreference } from './storage.ts'
+import { readClampedNumber, readPreference, writePreference } from './storage.ts'
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial))
@@ -41,4 +41,12 @@ test('writes preferences without leaking storage exceptions', () => {
     getItem() { return null },
     setItem() { throw new Error('quota exceeded') },
   }), false)
+})
+
+test('reads string preferences without leaking storage exceptions', () => {
+  assert.equal(readPreference('intro', memoryStorage({ intro: '2026-08-23' })), '2026-08-23')
+  assert.equal(readPreference('intro', {
+    getItem() { throw new Error('blocked') },
+    setItem() {},
+  }), null)
 })

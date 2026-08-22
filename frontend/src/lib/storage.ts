@@ -35,6 +35,18 @@ export function readClampedNumber(
   }
 }
 
+export function readPreference(
+  key: string,
+  storage: PreferenceStorage | null = browserStorage(),
+): string | null {
+  if (!storage) return null
+  try {
+    return storage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
 export function writePreference(
   key: string,
   value: string | number | boolean,

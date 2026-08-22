@@ -4,11 +4,16 @@ import test from 'node:test'
 import {
   MIN_EDITOR_WIDTH,
   clearPendingMissionFinalize,
+  dailyIntroStorageKey,
   describeMissionGeneration,
   isEditorWidthReady,
   readPendingMissionFinalize,
   writePendingMissionFinalize,
 } from './missionUx.ts'
+
+test('scopes the once-per-day intro marker to the signed-in user', () => {
+  assert.equal(dailyIntroStorageKey('user-1'), 'coding-tutor.daily-intro.user-1')
+})
 
 test('reports explicit AI stage counts for each skill level', () => {
   assert.equal(
