@@ -13,6 +13,7 @@ import {
 import type { ReviewRequest } from '../../hooks/useProject'
 import { getErrorMessage, isAbortError } from '../../lib/errors'
 import Confetti from '../Confetti'
+import { advanceButtonLabel } from './advanceUx'
 import { ChatSseParser } from './chatSse'
 import './FeedbackPanel.css'
 
@@ -92,6 +93,8 @@ export default function FeedbackPanel() {
   useEffect(() => { requestReviewRef.current = requestReview }, [requestReview])
   const cancelReviewRef = useRef(cancelReview)
   useEffect(() => { cancelReviewRef.current = cancelReview }, [cancelReview])
+  const finalStep = Boolean(projectStatus && projectStatus.totalSteps > 0 && projectStatus.currentStepNum >= projectStatus.totalSteps)
+  const recoveringStep = Boolean(pendingStepStatus || pendingCompletion)
 
   async function syncAppliedStep(data: ProjectStatus, signal: AbortSignal) {
     setProjectStatus(data)
@@ -541,22 +544,30 @@ export default function FeedbackPanel() {
 
       {stepComplete && testResult?.passed && testResult.scope === 'full' && (
         <div className="step-complete-banner" role="status">
-          <span>{pendingSemanticSync ? '저장된 변경을 확인하고 있습니다…' : '이 단계를 완료했습니다!'}</span>
+          <div className="step-complete-copy">
+            <span>{pendingSemanticSync ? '저장된 변경을 확인하고 있습니다…' : finalStep ? '마지막 단계를 완료했습니다!' : '이 단계를 완료했습니다!'}</span>
+            {advancing && !finalStep && !recoveringStep && (
+              <small>다음 과제·코드·퀴즈를 만들고 있어요. 보통 1~2분 걸립니다.</small>
+            )}
+          </div>
           <div className="step-complete-actions">
             <button
               onClick={handleNextStep}
               disabled={advancing || pendingSemanticSync || workspaceMutationLocked}
               className="next-step-btn"
             >
-              {pendingSemanticSync
-                ? '변경 확인 중…'
-                : advancing
-                ? '처리 중…'
-                : pendingStepStatus || pendingCompletion
-                  ? '단계 상태 다시 불러오기'
-                  : '다음 단계로 →'}
+              {advanceButtonLabel({
+                pendingSemanticSync,
+                advancing,
+                recovering: recoveringStep,
+                finalStep,
+              })}
             </button>
-            <button onClick={() => setStepComplete(false)} className="dismiss-btn">닫기</button>
+            {advancing && !finalStep && !recoveringStep ? (
+              <button onClick={() => advanceAbortRef.current?.abort()} className="dismiss-btn">생성 취소</button>
+            ) : (
+              <button onClick={() => setStepComplete(false)} className="dismiss-btn">닫기</button>
+            )}
           </div>
         </div>
       )}

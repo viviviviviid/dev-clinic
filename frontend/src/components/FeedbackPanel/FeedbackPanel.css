@@ -357,6 +357,18 @@
   flex-shrink: 0;
 }
 
+.step-complete-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.step-complete-copy small {
+  color: #8b949e;
+  font-size: 11px;
+}
+
 .step-incomplete-banner {
   background: #1c1107;
   border-bottom: 1px solid #9e6a03;
