@@ -624,7 +624,8 @@ func (c *Client) GenerateNextStep(ctx context.Context, tutorContent, nextStep st
    - 이번 단계에서 새로 만드는 함수/기능에만 HOLE/BUG를 설정하세요
 5. "## 개념 설명" 섹션을 새 기능의 핵심 개념으로 교체
 6. "## 파일 구성" 섹션에 이번 단계에서 추가/수정되는 파일 정보를 반영
-7. "## 최종 결과물", "## 학습자 목표", "## 언어 & 환경", "## 학습 수준", "## 진행 기록" 섹션은 그대로 유지
+7. "## 최종 결과물", "## 학습자 목표", "## 언어 & 환경", "## 학습 수준", "## 진행 기록" 섹션은 기존 내용을 글자와 공백까지 그대로 복사
+   - 이 다섯 섹션은 요약, 문장 다듬기, 표현 변경, 항목 추가를 절대 하지 않기
 8. 코드 예시는 inline code로만 쓰고 Markdown fenced code block은 사용하지 않기
 
 마크다운 코드블록 없이 TUTORSYS.md 전체 내용만 출력하세요.
@@ -635,7 +636,7 @@ func (c *Client) GenerateNextStep(ctx context.Context, tutorContent, nextStep st
 	if err != nil {
 		return "", err
 	}
-	doc, err := validateTutorSystemTransition(tutorContent, strings.TrimSpace(text), nextStep)
+	doc, err := normalizeTutorSystemTransition(tutorContent, strings.TrimSpace(text), nextStep)
 	if err != nil {
 		return "", fmt.Errorf("generated next-step curriculum failed validation: %w", err)
 	}

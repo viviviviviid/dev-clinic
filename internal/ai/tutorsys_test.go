@@ -137,3 +137,31 @@ func TestValidateTutorSystemTransition(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeTutorSystemTransitionRestoresTrustedState(t *testing.T) {
+	previous := tutorSystemFixture(1)
+	generated := tutorSystemFixture(2)
+	generated = strings.Replace(generated, "작은 프로그램을 단계별로 완성한다.", "모델이 바꾼 목표", 1)
+	generated = strings.Replace(generated, "명령줄 프로그램", "모델이 바꾼 결과물", 1)
+	generated = strings.ReplaceAll(generated, "Step 1: 기초", "Step 1: 모델 제목")
+	generated = strings.ReplaceAll(generated, "Step 2: 확장", "Step 2: 모델 제목")
+	generated = strings.ReplaceAll(generated, "Step 3: 완성", "Step 3: 모델 제목")
+	generated = strings.Replace(generated, "확장 개념", "새 슬라이스 개념", 1)
+
+	doc, err := normalizeTutorSystemTransition(previous, generated, "Step 2: 확장")
+	if err != nil {
+		t.Fatalf("normalize transition: %v", err)
+	}
+	if doc.Sections["학습자 목표"] != "작은 프로그램을 단계별로 완성한다." {
+		t.Fatalf("learner goal was not restored: %q", doc.Sections["학습자 목표"])
+	}
+	if doc.Sections["최종 결과물"] != "명령줄 프로그램" {
+		t.Fatalf("final result was not restored: %q", doc.Sections["최종 결과물"])
+	}
+	if doc.Sections["개념 설명"] != "새 슬라이스 개념" {
+		t.Fatalf("step-specific content was not preserved: %q", doc.Sections["개념 설명"])
+	}
+	if doc.CurrentStep != 2 || !doc.Steps[0].Completed || doc.Steps[1].Completed {
+		t.Fatalf("progress was not rebuilt: %#v", doc.Steps)
+	}
+}

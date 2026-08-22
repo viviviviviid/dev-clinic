@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -187,12 +188,14 @@ func AdvanceToNextStep(c *gin.Context) {
 
 	newCurriculum, err := ai.Global.GenerateNextStep(c.Request.Context(), req.Curriculum, nextFull, req.CurrentFiles)
 	if err != nil {
+		log.Printf("project next-step curriculum generation failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	files, err := ai.Global.GenerateCodeFiles(c.Request.Context(), newCurriculum, req.CurrentFiles)
 	if err != nil {
+		log.Printf("project next-step code generation failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -211,6 +214,7 @@ func AdvanceToNextStep(c *gin.Context) {
 		quizData, err := ai.Global.GenerateQuizData(c.Request.Context(), newCurriculum, files)
 		quizData, err = requireGeneratedQuiz(quizData, err)
 		if err != nil {
+			log.Printf("project next-step quiz generation failed: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

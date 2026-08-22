@@ -291,6 +291,59 @@ func validateTutorSystemTransition(previousRaw, nextRaw, requestedNext string) (
 	return next, nil
 }
 
+// normalizeTutorSystemTransition keeps model-authored, step-specific teaching
+// content while rebuilding all progression and immutable sections from the
+// trusted previous document. Those fields are application state, not creative
+// model output; harmless wording or whitespace changes must not block a learner.
+func normalizeTutorSystemTransition(previousRaw, generatedRaw, requestedNext string) (tutorSystemDocument, error) {
+	previous, err := parseTutorSystem(previousRaw)
+	if err != nil {
+		return tutorSystemDocument{}, fmt.Errorf("previous TUTORSYS.md: %w", err)
+	}
+	generated, err := parseTutorSystem(generatedRaw)
+	if err != nil {
+		return tutorSystemDocument{}, fmt.Errorf("generated TUTORSYS.md: %w", err)
+	}
+
+	requestedNumber, requestedFull, err := parseRequestedStep(requestedNext)
+	if err != nil {
+		return tutorSystemDocument{}, err
+	}
+	if requestedNumber != previous.CurrentStep+1 || requestedNumber > len(previous.Steps) || previous.Steps[requestedNumber-1].Full != requestedFull {
+		return tutorSystemDocument{}, fmt.Errorf("requested next step does not match the immediate curriculum successor")
+	}
+
+	for _, name := range []string{"학습자 목표", "언어 & 환경", "학습 수준", "최종 결과물", "진행 기록"} {
+		generated.Sections[name] = previous.Sections[name]
+	}
+	stepLines := make([]string, 0, len(previous.Steps))
+	for _, step := range previous.Steps {
+		mark := " "
+		if step.Number < requestedNumber {
+			mark = "x"
+		}
+		stepLines = append(stepLines, fmt.Sprintf("- [%s] %s", mark, step.Full))
+	}
+	generated.Sections["커리큘럼 단계"] = strings.Join(stepLines, "\n")
+	generated.Sections["현재 단계"] = requestedFull
+
+	normalized := renderTutorSystem(generated.Sections)
+	return validateTutorSystemTransition(previousRaw, normalized, requestedNext)
+}
+
+func renderTutorSystem(sections map[string]string) string {
+	var builder strings.Builder
+	builder.WriteString("# TUTORSYS\n")
+	for _, name := range requiredTutorSections {
+		builder.WriteString("\n## ")
+		builder.WriteString(name)
+		builder.WriteByte('\n')
+		builder.WriteString(strings.TrimSpace(sections[name]))
+		builder.WriteByte('\n')
+	}
+	return strings.TrimSpace(builder.String())
+}
+
 func parseRequestedStep(value string) (int, string, error) {
 	value = strings.TrimSpace(value)
 	match := tutorCurrentPattern.FindStringSubmatch(value)
