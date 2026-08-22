@@ -47,6 +47,7 @@ func feedbackSystemPrompt(skillLevel string) string {
 - 근거가 있을 때만 구체적으로 칭찬하세요.
 - 완성 코드를 직접 주지 말고 현재 수준에 맞는 힌트만 주세요.
 - 이전 피드백을 반복하지 마세요.
+- testOutput이 전체 테스트 통과를 명확히 보여주면 같은 테스트를 다시 실행하라고 하지 마세요. 다음 단계 진행, 새 경계 사례 탐색, 또는 방금 배운 개념 설명 중 하나를 다음 행동으로 제시하세요.
 %s`, tone, trustBoundaryInstruction)
 }
 

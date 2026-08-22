@@ -16,3 +16,9 @@ func TestCodePromptRequiresExplicitMarkerEnd(t *testing.T) {
 		t.Fatal("feedback prompt still delegates completion state to the model")
 	}
 }
+
+func TestFeedbackPromptDoesNotRepeatPassedTestAction(t *testing.T) {
+	if !strings.Contains(feedbackSystemPrompt("newbie"), "같은 테스트를 다시 실행하라고 하지 마세요") {
+		t.Fatal("feedback prompt does not prevent redundant test rerun advice")
+	}
+}
