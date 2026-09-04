@@ -272,9 +272,9 @@ func validateTopics(topics []TopicSuggestion) ([]TopicSuggestion, error) {
 		return nil, fmt.Errorf("topics must contain exactly three items")
 	}
 	byDifficulty := make(map[string]TopicSuggestion, 3)
-	seenStyles := make(map[string]struct{}, 3)
 	seenNames := make(map[string]struct{}, 3)
 	seenSlugs := make(map[string]struct{}, 3)
+	themedCount := 0
 	for _, topic := range topics {
 		topic.Name = strings.TrimSpace(topic.Name)
 		topic.Slug = strings.TrimSpace(topic.Slug)
@@ -293,8 +293,8 @@ func validateTopics(topics []TopicSuggestion) ([]TopicSuggestion, error) {
 		if topic.Style != "구조실험" && topic.Style != "현실사례" && topic.Style != "테마형" {
 			return nil, fmt.Errorf("invalid topic style %q", topic.Style)
 		}
-		if _, exists := seenStyles[topic.Style]; exists {
-			return nil, fmt.Errorf("duplicate topic style %q", topic.Style)
+		if topic.Style == "테마형" {
+			themedCount++
 		}
 		nameKey, slugKey := strings.ToLower(topic.Name), strings.ToLower(topic.Slug)
 		if _, exists := seenNames[nameKey]; exists {
@@ -304,11 +304,10 @@ func validateTopics(topics []TopicSuggestion) ([]TopicSuggestion, error) {
 			return nil, fmt.Errorf("duplicate topic slug %q", topic.Slug)
 		}
 		seenNames[nameKey], seenSlugs[slugKey] = struct{}{}, struct{}{}
-		seenStyles[topic.Style] = struct{}{}
 		byDifficulty[topic.Difficulty] = topic
 	}
-	if len(seenStyles) != 3 {
-		return nil, fmt.Errorf("topics must include structure, real-world, and themed styles")
+	if themedCount < 1 || themedCount > 2 {
+		return nil, fmt.Errorf("topics must include one or two themed styles")
 	}
 	return []TopicSuggestion{byDifficulty["하"], byDifficulty["중"], byDifficulty["상"]}, nil
 }

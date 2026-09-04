@@ -37,8 +37,8 @@ func TestTopicPromptsRequirePlayfulSemanticDiversity(t *testing.T) {
 		if !strings.Contains(prompt, "현실 사례") || !strings.Contains(prompt, "게임") || !strings.Contains(prompt, "구조실험") {
 			t.Fatalf("%s prompt does not mix structural, real-world, and game-based learning", name)
 		}
-		if !strings.Contains(prompt, "테마형") || !strings.Contains(prompt, "정확히 하나") || !strings.Contains(prompt, "기술명만") {
-			t.Fatalf("%s prompt does not require exactly one themed training", name)
+		if !strings.Contains(prompt, "테마형") || !strings.Contains(prompt, "1~2개") || !strings.Contains(prompt, "기술명만") {
+			t.Fatalf("%s prompt does not limit themed training to one or two", name)
 		}
 	}
 }

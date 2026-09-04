@@ -556,7 +556,7 @@ func (c *Client) GenerateDailyTopics(ctx context.Context, language, skillLevel s
 	if err != nil {
 		return nil, err
 	}
-	prompt := `직접 실행하고 가지고 놀 수 있는 프로젝트 주제 3개를 추천하세요. style은 구조실험, 현실사례, 테마형을 정확히 하나씩 사용하세요. 테마형 이름에는 구체적인 세계관·역할·목표가 드러나야 하며 기술명만 나열하면 안 됩니다. 세 주제는 서로 다른 프로젝트 유형과 핵심 개념을 사용해야 합니다. 각 주제는 HOLE과 BUG 과제로 평가할 수 있어야 합니다. pastTopics와 의미상 겹치는 주제 및 이름만 바꾼 변형을 제외하세요. creativeLens는 아이디어의 출발점으로만 사용하세요. slug는 영문 파스칼케이스이며 JSON 외 텍스트를 출력하지 마세요.
+	prompt := `직접 실행하고 가지고 놀 수 있는 프로젝트 주제 3개를 추천하세요. 테마형은 정확히 1~2개만 사용하고, 나머지는 구조실험 또는 현실사례로 분류하세요. 구조실험·현실사례에는 억지 세계관이나 게임 설정을 덧씌우지 마세요. 테마형 이름에는 구체적인 세계관·역할·목표가 드러나야 하며 기술명만 나열하면 안 됩니다. 세 주제는 서로 다른 프로젝트 유형과 핵심 개념을 사용해야 합니다. 각 주제는 HOLE과 BUG 과제로 평가할 수 있어야 합니다. pastTopics와 의미상 겹치는 주제 및 이름만 바꾼 변형을 제외하세요. creativeLens는 아이디어의 출발점으로만 사용하세요. slug는 영문 파스칼케이스이며 JSON 외 텍스트를 출력하지 마세요.
 
 ` + data
 	text, err := c.generateStructured(ctx, topicsSystemPrompt, prompt, topicsSchema())

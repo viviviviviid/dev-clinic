@@ -147,10 +147,24 @@ func TestValidateTopics(t *testing.T) {
 		t.Fatal("duplicate difficulty was accepted")
 	}
 
-	missingTheme := append([]TopicSuggestion(nil), input...)
-	missingTheme[1].Style = "구조실험"
-	if _, err := validateTopics(missingTheme); err == nil {
-		t.Fatal("topic set without exactly one themed training was accepted")
+	twoThemes := append([]TopicSuggestion(nil), input...)
+	twoThemes[0].Style = "테마형"
+	if _, err := validateTopics(twoThemes); err != nil {
+		t.Fatalf("topic set with two themed trainings: %v", err)
+	}
+
+	noThemes := append([]TopicSuggestion(nil), input...)
+	noThemes[1].Style = "구조실험"
+	if _, err := validateTopics(noThemes); err == nil {
+		t.Fatal("topic set without a themed training was accepted")
+	}
+
+	threeThemes := append([]TopicSuggestion(nil), input...)
+	for i := range threeThemes {
+		threeThemes[i].Style = "테마형"
+	}
+	if _, err := validateTopics(threeThemes); err == nil {
+		t.Fatal("topic set with three themed trainings was accepted")
 	}
 }
 
