@@ -152,6 +152,13 @@ value := 0
 		"end description": `// [TUTOR:HOLE]
 value := 0
 // [TUTOR:END] trailing`,
+		"oversized body": `// [TUTOR:HOLE]
+one := 1
+two := 2
+three := 3
+four := 4
+five := 5
+// [TUTOR:END]`,
 	}
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -163,6 +170,14 @@ value := 0
 
 	if _, _, err := validateMarkerLayout(contract, "main_test.go", valid, true); err == nil {
 		t.Fatal("markers in a test file were accepted")
+	}
+}
+
+func TestCodeGenerationPromptKeepsTasksSmallAndUnsolved(t *testing.T) {
+	for _, want := range []string{"현재 단계 과제", "정답 코드", "최대 4줄", "독립 marker"} {
+		if !strings.Contains(codeFilesSystemPrompt, want) {
+			t.Fatalf("code generation prompt is missing %q", want)
+		}
 	}
 }
 

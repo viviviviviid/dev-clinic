@@ -330,8 +330,10 @@ func (c *Client) GenerateCodeFiles(ctx context.Context, tutorContent string, exi
 - 기존 파일이 있으면 이전 단계의 HOLE/BUG를 올바른 코드로 완성하되 마커 없는 학습자 코드는 보존하세요.
 - 새 [TUTOR:HOLE]/[TUTOR:BUG]는 현재 단계의 새 기능에만 추가하세요.
 - HOLE과 BUG를 각각 하나 이상 만드세요.
+- 현재 단계의 과제로 제시한 구현·수정의 정답 코드를 marker 밖에 미리 작성하지 마세요. 필요한 스캐폴드와 이전 단계의 완료 코드만 marker 밖에 둘 수 있습니다.
 - 각 과제 범위는 독립된 %s 주석 시작 줄([TUTOR:HOLE] 또는 [TUTOR:BUG])과 독립된 %s 주석 종료 줄([TUTOR:END])로 감싸세요. 설명은 시작 marker와 같은 줄에만 쓰세요.
-- 시작 marker와 [TUTOR:END] 사이에는 학습자가 통째로 교체할 컴파일 가능한 placeholder/bug 본문을 한 줄 이상 넣으세요. 여러 줄 본문도 허용되며 에디터는 시작부터 END까지 전부 입력 코드로 치환합니다.
+- marker 하나에는 한 가지 작은 구현 또는 한 가지 국소 버그만 넣으세요. 시작 marker와 [TUTOR:END] 사이의 비주석 코드 줄은 최대 4줄입니다. 구조체 여러 개와 메서드 전체처럼 큰 묶음은 독립 marker로 나누세요.
+- 시작 marker와 [TUTOR:END] 사이에는 학습자가 에디터에서 직접 바꿀 컴파일 가능한 placeholder/bug 본문을 한 줄 이상 넣으세요.
 - marker 범위는 정확히 1:1로 닫고 중첩하거나 겹치지 마세요. 범위 밖의 시그니처와 주변 코드는 marker가 남아 있는 초기 상태에서도 컴파일되어야 합니다.
 - BUG는 실제 호출 경로의 컴파일 가능한 논리 오류여야 합니다.
 - 각 마커에는 수정 전 실패하고 올바른 구현 후 통과하는 결정적 테스트가 있어야 합니다.

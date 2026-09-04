@@ -10,6 +10,11 @@ interface TutorMarkerRange {
   baseIndent: string
 }
 
+export interface TutorMarkerLineRange {
+  startLineNumber: number
+  endLineNumber: number
+}
+
 function formatSnippet(code: string, baseIndent: string): string[] | null {
   const lines = code.replace(/\r\n/g, '\n').split('\n')
   while (lines.length > 0 && lines[0].trim() === '') lines.shift()
@@ -27,14 +32,7 @@ function formatSnippet(code: string, baseIndent: string): string[] | null {
   })
 }
 
-export function replaceTutorMarkerAtIndex(
-  content: string,
-  markerType: TutorMarkerType,
-  markerIndex: number,
-  code: string,
-): string {
-  if (!Number.isInteger(markerIndex) || markerIndex < 0) return content
-
+function collectTutorMarkerRanges(content: string): TutorMarkerRange[] | null {
   const lines = content.split('\n')
   const ranges: TutorMarkerRange[] = []
   let open: (Omit<TutorMarkerRange, 'end'> & { comment: string }) | null = null
@@ -42,7 +40,7 @@ export function replaceTutorMarkerAtIndex(
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const startMatch = lines[lineIndex].match(START_MARKER)
     if (startMatch) {
-      if (open) return content
+      if (open) return null
       open = {
         kind: startMatch[3].toLowerCase() as TutorMarkerType,
         start: lineIndex,
@@ -54,14 +52,49 @@ export function replaceTutorMarkerAtIndex(
 
     const endMatch = lines[lineIndex].match(END_MARKER)
     if (!endMatch) continue
-    if (!open || endMatch[1] !== open.comment) return content
+    if (!open || endMatch[1] !== open.comment) return null
     ranges.push({ kind: open.kind, start: open.start, end: lineIndex, baseIndent: open.baseIndent })
     open = null
   }
-  if (open) return content
+  if (open) return null
 
-  const target = ranges.filter(range => range.kind === markerType)[markerIndex]
+  return ranges
+}
+
+function markerRangeAtIndex(
+  content: string,
+  markerType: TutorMarkerType,
+  markerIndex: number,
+): TutorMarkerRange | null {
+  if (!Number.isInteger(markerIndex) || markerIndex < 0) return null
+  const ranges = collectTutorMarkerRanges(content)
+  if (!ranges) return null
+  return ranges.filter(range => range.kind === markerType)[markerIndex] ?? null
+}
+
+export function findTutorMarkerLineRange(
+  content: string,
+  markerType: TutorMarkerType,
+  markerIndex: number,
+): TutorMarkerLineRange | null {
+  const target = markerRangeAtIndex(content, markerType, markerIndex)
+  if (!target) return null
+  return {
+    startLineNumber: target.start + 1,
+    endLineNumber: target.end + 1,
+  }
+}
+
+export function replaceTutorMarkerAtIndex(
+  content: string,
+  markerType: TutorMarkerType,
+  markerIndex: number,
+  code: string,
+): string {
+  const target = markerRangeAtIndex(content, markerType, markerIndex)
   if (!target) return content
+
+  const lines = content.split('\n')
 
   const replacement = formatSnippet(code, target.baseIndent)
   if (!replacement) return content

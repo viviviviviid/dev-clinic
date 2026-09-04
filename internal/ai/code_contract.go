@@ -20,6 +20,8 @@ type tutorMarkerRange struct {
 	EndLine   int
 }
 
+const maxTutorMarkerBodyLines = 4
+
 func languageContract(language string) (tutoringLanguageContract, error) {
 	normalized := strings.ToLower(strings.TrimSpace(language))
 	if normalized == "solidity" {
@@ -108,6 +110,7 @@ func parseTutorMarkerRanges(comment, filename, content string) ([]tutorMarkerRan
 	openKind := ""
 	openLine := -1
 	hasBody := false
+	bodyLines := 0
 
 	for i, line := range lines {
 		kind, present, err := parseTutorMarkerLine(comment, line)
@@ -119,6 +122,7 @@ func parseTutorMarkerRanges(comment, filename, content string) ([]tutorMarkerRan
 				trimmed := strings.TrimSpace(line)
 				if trimmed != "" && !strings.HasPrefix(trimmed, comment) {
 					hasBody = true
+					bodyLines++
 				}
 			}
 			continue
@@ -132,6 +136,7 @@ func parseTutorMarkerRanges(comment, filename, content string) ([]tutorMarkerRan
 			openKind = kind
 			openLine = i
 			hasBody = false
+			bodyLines = 0
 		case "end":
 			if openKind == "" {
 				return nil, fmt.Errorf("marker %s:%d has no matching HOLE or BUG start", filename, i+1)
@@ -139,10 +144,14 @@ func parseTutorMarkerRanges(comment, filename, content string) ([]tutorMarkerRan
 			if !hasBody {
 				return nil, fmt.Errorf("marker range %s:%d-%d must contain at least one non-comment code line", filename, openLine+1, i+1)
 			}
+			if bodyLines > maxTutorMarkerBodyLines {
+				return nil, fmt.Errorf("marker range %s:%d-%d has %d code lines; maximum is %d", filename, openLine+1, i+1, bodyLines, maxTutorMarkerBodyLines)
+			}
 			ranges = append(ranges, tutorMarkerRange{Kind: openKind, StartLine: openLine, EndLine: i})
 			openKind = ""
 			openLine = -1
 			hasBody = false
+			bodyLines = 0
 		}
 	}
 	if openKind != "" {

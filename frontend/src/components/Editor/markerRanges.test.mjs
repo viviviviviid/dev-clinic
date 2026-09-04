@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { replaceTutorMarkerAtIndex } from './markerRanges.ts'
+import { findTutorMarkerLineRange, replaceTutorMarkerAtIndex } from './markerRanges.ts'
+
+test('finds the complete marker range for direct editor editing', () => {
+  const content = `func total() int {
+  // [TUTOR:HOLE] calculate total
+  return 0
+  // [TUTOR:END]
+}`
+
+  assert.deepEqual(findTutorMarkerLineRange(content, 'hole', 0), {
+    startLineNumber: 2,
+    endLineNumber: 4,
+  })
+  assert.equal(findTutorMarkerLineRange(content, 'bug', 0), null)
+})
 
 test('replaces a multiline Go HOLE range including both markers', () => {
   const content = `func total(values []int) int {

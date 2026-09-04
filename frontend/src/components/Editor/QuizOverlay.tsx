@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import type { editor } from 'monaco-editor'
 import type { QuizData, QuizItem } from '../../store'
-import { applyQuizCandidate } from './quizSubmission'
 
 interface QuizOverlayProps {
   editor: editor.IStandaloneCodeEditor
@@ -9,7 +8,7 @@ interface QuizOverlayProps {
   content: string
   quizData: QuizData
   solvedHoles: Set<string>
-  onSolve: (key: string, code: string, markerType: string, markerIndex: number) => Promise<boolean>
+  onFocusMarker: (markerType: string, markerIndex: number) => void
 }
 
 interface QuizLine {
@@ -25,26 +24,12 @@ interface OpenZone {
   docTop: number
 }
 
-export default function QuizOverlay({ editor, filename, content, quizData, solvedHoles, onSolve }: QuizOverlayProps) {
+export default function QuizOverlay({ editor, filename, content, quizData, solvedHoles, onFocusMarker }: QuizOverlayProps) {
   const [scrollTop, setScrollTop] = useState(editor.getScrollTop())
   const [, forceUpdate] = useState(0)
   const openZonesRef = useRef<Map<string, OpenZone>>(new Map())
   const [openWidgets, setOpenWidgets] = useState<Set<string>>(new Set())
   const [hintLevels, setHintLevels] = useState<Record<string, number>>({})
-  const [writeInputs, setWriteInputs] = useState<Record<string, string>>({})
-  const [submittingKeys, setSubmittingKeys] = useState<Set<string>>(new Set())
-  const [submitErrors, setSubmitErrors] = useState<Record<string, string>>({})
-  const submittingRef = useRef<Set<string>>(new Set())
-  const mountedRef = useRef(true)
-
-  useEffect(() => {
-    mountedRef.current = true
-    const submissions = submittingRef.current
-    return () => {
-      mountedRef.current = false
-      submissions.clear()
-    }
-  }, [])
 
   const quizLines = useMemo<QuizLine[]>(() => {
     const lines: QuizLine[] = []
@@ -159,32 +144,6 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     forceUpdate(n => n + 1)
   }
 
-  async function handleSubmit(item: QuizItem) {
-    if (submittingRef.current.has(item.key)) return
-    submittingRef.current.add(item.key)
-    const code = writeInputs[item.key] ?? ''
-    setSubmittingKeys(prev => new Set(prev).add(item.key))
-    setSubmitErrors(prev => ({ ...prev, [item.key]: '' }))
-
-    const result = await applyQuizCandidate(code, () => (
-      onSolve(item.key, code, item.markerType || 'hole', item.markerIndex ?? 0)
-    ))
-    submittingRef.current.delete(item.key)
-    if (!mountedRef.current) return
-
-    setSubmittingKeys(prev => {
-      const next = new Set(prev)
-      next.delete(item.key)
-      return next
-    })
-    if (result.applied) {
-      setWriteInputs(prev => ({ ...prev, [item.key]: '' }))
-      closeHint(item.key)
-    } else {
-      setSubmitErrors(prev => ({ ...prev, [item.key]: result.error }))
-    }
-  }
-
   return (
     <div className="quiz-overlay">
       {quizLines.map(({ key, lineNumber, item, isLocked }) => {
@@ -226,14 +185,10 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
             top={zone.docTop - scrollTop}
             hints={hints}
             hintLevel={hintLevels[key] ?? 0}
-            writeInput={writeInputs[key] ?? ''}
-            submitting={submittingKeys.has(key)}
-            submitError={submitErrors[key] ?? ''}
-            onWriteInputChange={(v) => {
-              setWriteInputs(prev => ({ ...prev, [key]: v }))
-              if (submitErrors[key]) setSubmitErrors(prev => ({ ...prev, [key]: '' }))
+            onFocusMarker={() => {
+              onFocusMarker(item.markerType || 'hole', item.markerIndex ?? 0)
+              closeHint(key)
             }}
-            onSubmit={() => void handleSubmit(item)}
             onRevealHint={() => setHintLevels(prev => ({ ...prev, [key]: Math.min((prev[key] ?? 0) + 1, hints.length - 1) }))}
             onClose={() => closeHint(key)}
             onHeightChange={h => updateZoneHeight(key, h)}
@@ -251,11 +206,7 @@ interface HintCardProps {
   top: number
   hints: string[]
   hintLevel: number
-  writeInput: string
-  submitting: boolean
-  submitError: string
-  onWriteInputChange: (val: string) => void
-  onSubmit: () => void
+  onFocusMarker: () => void
   onRevealHint: () => void
   onClose: () => void
   onHeightChange: (h: number) => void
@@ -263,7 +214,7 @@ interface HintCardProps {
 
 function HintCard({
   quizKey, item, top, hints, hintLevel,
-  writeInput, submitting, submitError, onWriteInputChange, onSubmit,
+  onFocusMarker,
   onRevealHint, onClose, onHeightChange,
 }: HintCardProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -283,7 +234,6 @@ function HintCard({
   const revealedHints = hints.slice(0, hintLevel + 1)
   const canRevealMore = hintLevel < hints.length - 1
   const cardId = `quiz-card-${quizKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
-  const errorId = `${cardId}-error`
 
   return (
     <div
@@ -302,47 +252,19 @@ function HintCard({
       <div className="quiz-body">
         <div className="quiz-question">{item.question}</div>
 
-        {/* 코드 입력 */}
         <div className="write-mode">
-          <div className="write-input-area">
-            <textarea
-              className="write-textarea"
-              value={writeInput}
-              onChange={e => onWriteInputChange(e.target.value)}
-              placeholder="코드를 직접 입력하세요..."
-              onKeyDown={e => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault()
-                  onSubmit()
-                }
-              }}
-              spellCheck={false}
-              rows={3}
-              autoFocus
-              disabled={submitting}
-              aria-label="과제에 적용할 코드"
-              aria-invalid={submitError ? true : undefined}
-              aria-describedby={submitError ? errorId : `${cardId}-verification-note`}
-            />
-            <div className="write-input-hint">⌘/Ctrl+Enter 로 제출</div>
-          </div>
-
           <button
             type="button"
             className="write-submit-btn"
-            onClick={onSubmit}
-            disabled={!writeInput.trim() || submitting}
+            onClick={onFocusMarker}
           >
-            {submitting ? '적용 중…' : '코드에 적용 →'}
+            에디터에서 직접 수정 →
           </button>
         </div>
 
         <p className="quiz-verification-note" id={`${cardId}-verification-note`}>
-          여기서는 코드를 적용만 합니다. 정답 여부는 적용 후 전체 테스트를 실행해 확인하세요.
+          선택된 범위를 에디터에서 직접 바꾸세요. ⌘Z/Ctrl+Z로 되돌릴 수 있고, 수정 후 전체 테스트로 확인합니다.
         </p>
-        {submitError && (
-          <p className="quiz-submit-error" id={errorId} role="alert">{submitError}</p>
-        )}
 
         {/* 힌트 섹션 */}
         {hints.length > 0 && (

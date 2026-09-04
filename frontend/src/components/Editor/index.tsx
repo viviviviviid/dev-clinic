@@ -24,7 +24,7 @@ import ConceptPanel from './ConceptPanel'
 import './Editor.css'
 import { apiFetch, apiJson } from '../../lib/api'
 import { getErrorMessage, isAbortError } from '../../lib/errors'
-import { replaceTutorMarkerAtIndex } from './markerRanges'
+import { findTutorMarkerLineRange } from './markerRanges'
 import {
   createEditorAutosave,
   installEditorAutosaveLifecycle,
@@ -33,7 +33,6 @@ import {
 import { createTestRunRequest } from './testRun'
 import { shouldCancelReviewOnEdit } from './reviewEditCancellation'
 import { isReviewableSourcePath } from './reviewableSource'
-import { persistQuizCandidate } from './quizSubmission'
 
 type MonacoEnvironmentGlobal = typeof globalThis & {
   MonacoEnvironment?: {
@@ -309,7 +308,6 @@ export default function Editor() {
     skillLevel,
     quizData,
     solvedHoles,
-    markHoleSolved,
     projectStatus,
     openTabs,
     addTab,
@@ -1173,28 +1171,27 @@ export default function Editor() {
     outputEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [runOutput])
 
-  async function handleQuizSolve(key: string, correctCode: string, markerType: string, markerIndex: number): Promise<boolean> {
-    const targetPath = openFile
-    const originalContent = openFileContent
-    const newContent = replaceTutorMarkerAtIndex(
-      originalContent,
+  function focusQuizMarker(markerType: string, markerIndex: number) {
+    const ed = editorRef.current
+    const model = ed?.getModel()
+    if (!ed || !model) return
+    const markerRange = findTutorMarkerLineRange(
+      model.getValue(),
       markerType === 'bug' ? 'bug' : 'hole',
       markerIndex,
-      correctCode,
     )
-    if (newContent === originalContent) {
-      addToast('과제 마커 범위를 찾지 못해 코드를 적용하지 않았습니다.', 'error')
-      return false
+    if (!markerRange) {
+      addToast('과제 마커 범위를 찾지 못했습니다.', 'error')
+      return
     }
-    if (!targetPath) return false
-    return persistQuizCandidate(
-      async () => await autosaveRef.current?.saveNow(targetPath, newContent) === true,
-      () => {
-        useStore.getState().updateTabContent(targetPath, newContent)
-        markHoleSolved(key)
-      },
-      () => useStore.getState().openTabs.find((tab) => tab.path === targetPath)?.content === originalContent,
-    )
+    ed.setSelection({
+      startLineNumber: markerRange.startLineNumber,
+      startColumn: 1,
+      endLineNumber: markerRange.endLineNumber,
+      endColumn: model.getLineMaxColumn(markerRange.endLineNumber),
+    })
+    ed.revealLineInCenter(markerRange.startLineNumber)
+    ed.focus()
   }
 
   async function streamOutput(endpoint: string, title: string, setActive: (v: boolean) => void) {
@@ -1486,7 +1483,7 @@ export default function Editor() {
               content={openFileContent}
               quizData={quizData}
               solvedHoles={solvedHoles}
-              onSolve={handleQuizSolve}
+              onFocusMarker={focusQuizMarker}
             />
           )}
           {showConcept && (
