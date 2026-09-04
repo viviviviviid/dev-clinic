@@ -487,6 +487,7 @@ type TopicSuggestion struct {
 	Name       string `json:"name"`
 	Slug       string `json:"slug"`
 	Difficulty string `json:"difficulty"` // "상" | "중" | "하"
+	Style      string `json:"style"`      // "구조실험" | "현실사례" | "테마형"
 }
 
 // NurseChatMessage is a single turn in a nurse chat conversation.
@@ -552,7 +553,7 @@ func (c *Client) GenerateDailyTopics(ctx context.Context, language, skillLevel s
 	if err != nil {
 		return nil, err
 	}
-	prompt := `직접 실행하고 가지고 놀 수 있는 프로젝트 주제 3개를 추천하세요. 세 주제는 서로 다른 프로젝트 유형과 핵심 개념을 사용하고, 이론·구조 실험, 현실 사례형 시스템, 게임·시뮬레이션·비유 중 최소 두 방식을 섞어야 합니다. 각 주제는 HOLE과 BUG 과제로 평가할 수 있어야 합니다. pastTopics와 의미상 겹치는 주제 및 이름만 바꾼 변형을 제외하세요. creativeLens는 아이디어의 출발점으로만 사용하세요. slug는 영문 파스칼케이스이며 JSON 외 텍스트를 출력하지 마세요.
+	prompt := `직접 실행하고 가지고 놀 수 있는 프로젝트 주제 3개를 추천하세요. style은 구조실험, 현실사례, 테마형을 정확히 하나씩 사용하세요. 테마형 이름에는 구체적인 세계관·역할·목표가 드러나야 하며 기술명만 나열하면 안 됩니다. 세 주제는 서로 다른 프로젝트 유형과 핵심 개념을 사용해야 합니다. 각 주제는 HOLE과 BUG 과제로 평가할 수 있어야 합니다. pastTopics와 의미상 겹치는 주제 및 이름만 바꾼 변형을 제외하세요. creativeLens는 아이디어의 출발점으로만 사용하세요. slug는 영문 파스칼케이스이며 JSON 외 텍스트를 출력하지 마세요.
 
 ` + data
 	text, err := c.generateStructured(ctx, topicsSystemPrompt, prompt, topicsSchema())

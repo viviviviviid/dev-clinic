@@ -120,9 +120,9 @@ func TestValidateQuizMatchesMarkers(t *testing.T) {
 
 func TestValidateTopics(t *testing.T) {
 	input := []TopicSuggestion{
-		{Name: "상급", Slug: "AdvancedTopic", Difficulty: "상"},
-		{Name: "초급", Slug: "BeginnerTopic", Difficulty: "하"},
-		{Name: "중급", Slug: "MiddleTopic", Difficulty: "중"},
+		{Name: "상급", Slug: "AdvancedTopic", Difficulty: "상", Style: "구조실험"},
+		{Name: "초급", Slug: "BeginnerTopic", Difficulty: "하", Style: "테마형"},
+		{Name: "중급", Slug: "MiddleTopic", Difficulty: "중", Style: "현실사례"},
 	}
 	got, err := validateTopics(input)
 	if err != nil {
@@ -133,9 +133,9 @@ func TestValidateTopics(t *testing.T) {
 	}
 
 	invalid := []TopicSuggestion{
-		{Name: "A", Slug: "bad-slug", Difficulty: "하"},
-		{Name: "B", Slug: "Middle", Difficulty: "중"},
-		{Name: "C", Slug: "Advanced", Difficulty: "상"},
+		{Name: "A", Slug: "bad-slug", Difficulty: "하", Style: "테마형"},
+		{Name: "B", Slug: "Middle", Difficulty: "중", Style: "현실사례"},
+		{Name: "C", Slug: "Advanced", Difficulty: "상", Style: "구조실험"},
 	}
 	if _, err := validateTopics(invalid); err == nil {
 		t.Fatal("invalid slug was accepted")
@@ -145,6 +145,12 @@ func TestValidateTopics(t *testing.T) {
 	duplicateDifficulty[0].Difficulty = "중"
 	if _, err := validateTopics(duplicateDifficulty); err == nil {
 		t.Fatal("duplicate difficulty was accepted")
+	}
+
+	missingTheme := append([]TopicSuggestion(nil), input...)
+	missingTheme[1].Style = "구조실험"
+	if _, err := validateTopics(missingTheme); err == nil {
+		t.Fatal("topic set without exactly one themed training was accepted")
 	}
 }
 

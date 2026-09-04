@@ -263,6 +263,32 @@ func TestCodexLiveTutorContract(t *testing.T) {
 	}
 }
 
+func TestCodexLiveTopicContract(t *testing.T) {
+	if os.Getenv("CODEX_LIVE_TOPIC_TEST") != "1" {
+		t.Skip("set CODEX_LIVE_TOPIC_TEST=1 to verify topic recommendations with the saved Codex CLI login")
+	}
+
+	backend, err := newCodexBackend(os.Getenv("CODEX_BIN"), os.Getenv("CODEX_MODEL"))
+	if err != nil {
+		t.Fatalf("initialize Codex CLI backend: %v", err)
+	}
+	client := &Client{codex: backend}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	topics, err := client.GenerateDailyTopics(ctx, "go", "normal", []string{
+		"JSON 설정 파일 검증기",
+		"파일 업로드 제한 미들웨어",
+		"TTL 인메모리 캐시",
+	})
+	if err != nil {
+		t.Fatalf("live topic contract: %v", err)
+	}
+	for _, topic := range topics {
+		t.Logf("%s/%s: %s", topic.Difficulty, topic.Style, topic.Name)
+	}
+}
+
 func disabledFeaturesFromArgs(args []string) []string {
 	var result []string
 	for i := 0; i+1 < len(args); i++ {

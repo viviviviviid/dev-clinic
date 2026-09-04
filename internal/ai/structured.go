@@ -150,11 +150,12 @@ func nurseReplySchema() map[string]any {
 func topicItemSchema() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
-		"required": []string{"name", "slug", "difficulty"},
+		"required": []string{"name", "slug", "difficulty", "style"},
 		"properties": map[string]any{
 			"name":       map[string]any{"type": "string", "minLength": 1, "maxLength": maxTopicNameRunes},
 			"slug":       map[string]any{"type": "string", "pattern": slugPattern.String()},
 			"difficulty": map[string]any{"type": "string", "enum": []string{"하", "중", "상"}},
+			"style":      map[string]any{"type": "string", "enum": []string{"구조실험", "현실사례", "테마형"}},
 		},
 	}
 }
@@ -271,6 +272,7 @@ func validateTopics(topics []TopicSuggestion) ([]TopicSuggestion, error) {
 		return nil, fmt.Errorf("topics must contain exactly three items")
 	}
 	byDifficulty := make(map[string]TopicSuggestion, 3)
+	seenStyles := make(map[string]struct{}, 3)
 	seenNames := make(map[string]struct{}, 3)
 	seenSlugs := make(map[string]struct{}, 3)
 	for _, topic := range topics {
@@ -288,6 +290,12 @@ func validateTopics(topics []TopicSuggestion) ([]TopicSuggestion, error) {
 		if _, exists := byDifficulty[topic.Difficulty]; exists {
 			return nil, fmt.Errorf("duplicate topic difficulty %q", topic.Difficulty)
 		}
+		if topic.Style != "구조실험" && topic.Style != "현실사례" && topic.Style != "테마형" {
+			return nil, fmt.Errorf("invalid topic style %q", topic.Style)
+		}
+		if _, exists := seenStyles[topic.Style]; exists {
+			return nil, fmt.Errorf("duplicate topic style %q", topic.Style)
+		}
 		nameKey, slugKey := strings.ToLower(topic.Name), strings.ToLower(topic.Slug)
 		if _, exists := seenNames[nameKey]; exists {
 			return nil, fmt.Errorf("duplicate topic name %q", topic.Name)
@@ -296,7 +304,11 @@ func validateTopics(topics []TopicSuggestion) ([]TopicSuggestion, error) {
 			return nil, fmt.Errorf("duplicate topic slug %q", topic.Slug)
 		}
 		seenNames[nameKey], seenSlugs[slugKey] = struct{}{}, struct{}{}
+		seenStyles[topic.Style] = struct{}{}
 		byDifficulty[topic.Difficulty] = topic
+	}
+	if len(seenStyles) != 3 {
+		return nil, fmt.Errorf("topics must include structure, real-world, and themed styles")
 	}
 	return []TopicSuggestion{byDifficulty["하"], byDifficulty["중"], byDifficulty["상"]}, nil
 }
