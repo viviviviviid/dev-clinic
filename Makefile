@@ -1,6 +1,6 @@
 .PHONY: dev dev-be dev-fe test lint build-fe build-be build
 
-DIR ?= .
+DIR ?= $(CURDIR)/data
 
 dev-be:
 	go run ./cmd/clinic $(DIR)

@@ -8,7 +8,8 @@
 cp config.toml.example config.toml
 cp frontend/.env.example frontend/.env
 codex login                         # 기본 AI provider
-make dev DIR=~/learning
+make dev                            # 기본 BaseDir: ./data
+./run.sh                            # 배포된 frontend 사용 시 backend만 실행
 make test
 make build
 ```
@@ -20,6 +21,7 @@ make build
 ## 경계
 
 - `/health`만 무인증이다. `/api/*`는 Supabase JWT를 검증한다.
+- 로그인 UI는 Google OAuth만 제공하고 clinic은 `ALLOWED_USER_EMAILS`/`ALLOWED_USER_IDS`로 최종 접근을 제한한다.
 - WS, terminal, LSP는 `['coding-tutor', jwt]` subprotocol을 Upgrade 전에 검증한다. JWT를 query에 넣지 않는다.
 - clinic은 loopback Host와 명시된 production/custom Origin만 허용한다.
 - 모든 디스크 경로는 `config.Global.BaseDir` 내부여야 한다. `internal/pathguard`와 `os.Root` 방어를 우회하지 않는다.

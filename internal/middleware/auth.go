@@ -186,14 +186,15 @@ func ValidateToken(tokenString string) (string, error) {
 	if !ok || strings.TrimSpace(userID) == "" {
 		return "", errors.New("missing token subject")
 	}
-	if !isAllowedUser(userID) {
-		return "", errors.New("token subject is not allowed")
+	email, _ := claims["email"].(string)
+	if !isAllowedUser(userID, email) {
+		return "", errors.New("token identity is not allowed")
 	}
 
 	return userID, nil
 }
 
-func isAllowedUser(userID string) bool {
+func isAllowedUser(userID, email string) bool {
 	configured := false
 	for _, allowedUserID := range []string{os.Getenv("ALLOWED_USER_ID"), os.Getenv("ALLOWED_USER_IDS")} {
 		if strings.TrimSpace(allowedUserID) != "" {
@@ -203,6 +204,18 @@ func isAllowedUser(userID string) bool {
 			return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
 		}) {
 			if candidate == userID {
+				return true
+			}
+		}
+	}
+	for _, allowedEmail := range []string{os.Getenv("ALLOWED_USER_EMAIL"), os.Getenv("ALLOWED_USER_EMAILS")} {
+		if strings.TrimSpace(allowedEmail) != "" {
+			configured = true
+		}
+		for _, candidate := range strings.FieldsFunc(allowedEmail, func(r rune) bool {
+			return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		}) {
+			if strings.EqualFold(candidate, strings.TrimSpace(email)) {
 				return true
 			}
 		}

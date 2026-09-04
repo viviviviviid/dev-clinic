@@ -5,6 +5,7 @@ import { useStore } from '../../store'
 import { getErrorMessage, isAbortError } from '../../lib/errors'
 import { readPreference, writePreference } from '../../lib/storage'
 import { NurseSseParser } from './nurseSse'
+import { rememberSuggestedTopics } from './topicDiversity'
 import {
   MIN_EDITOR_WIDTH,
   clearPendingMissionFinalize,
@@ -254,6 +255,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
             setNurseChatHistory([...newHistory, { role: 'nurse', content: nurseReply }])
           } else if (event.type === 'topics') {
             setNurseChatSuggestedTopics(event.topics)
+            setPastTopics((current) => rememberSuggestedTopics(current, event.topics))
           } else if (event.type === 'done') {
             streamComplete = true
           }

@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Build and run the single local clinic backend.
 # Usage: ./run.sh [project-base-directory]
+# Defaults to the repository-local data directory.
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 if [[ -f "$script_dir/.env.local" ]]; then
@@ -12,6 +13,6 @@ if [[ -f "$script_dir/.env.local" ]]; then
   set +a
 fi
 
-project_dir="${1:-.}"
+project_dir="${1:-$script_dir/data}"
 make build-be
 exec ./bin/clinic "$project_dir"

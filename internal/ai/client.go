@@ -501,10 +501,13 @@ func (c *Client) GenerateNurseReply(ctx context.Context, message string, history
 	if err := requireTextLimit("nurse message", message, maxChatMessageBytes); err != nil {
 		return NurseReply{}, err
 	}
+	normalizedTopics := normalizedPastTopics(pastTopics)
 	data, err := marshalUntrustedData(map[string]any{
 		"message":          message,
 		"history":          recentNurseMessages(history),
-		"pastTopics":       normalizedPastTopics(pastTopics),
+		"pastTopics":       normalizedTopics,
+		"creativeLens":     topicCreativeLens(normalizedTopics),
+		"currentDate":      time.Now().Format("2006-01-02"),
 		"language":         clipUTF8(language, 64),
 		"skillLevel":       skillLevel,
 		"skillDescription": skillLevelToKorean(skillLevel),
@@ -538,15 +541,18 @@ func (c *Client) GenerateNurseReply(ctx context.Context, message string, history
 }
 
 func (c *Client) GenerateDailyTopics(ctx context.Context, language, skillLevel string, pastTopics []string) ([]TopicSuggestion, error) {
+	normalizedTopics := normalizedPastTopics(pastTopics)
 	data, err := marshalUntrustedData(map[string]any{
 		"language": language, "skillLevel": skillLevel,
 		"skillDescription": skillLevelToKorean(skillLevel),
-		"pastTopics":       normalizedPastTopics(pastTopics),
+		"pastTopics":       normalizedTopics,
+		"creativeLens":     topicCreativeLens(normalizedTopics),
+		"currentDate":      time.Now().Format("2006-01-02"),
 	})
 	if err != nil {
 		return nil, err
 	}
-	prompt := `실용적인 예제 기반 주제 3개를 추천하세요. 각 주제는 HOLE과 BUG 과제로 평가할 수 있고 과거 주제와 겹치지 않아야 합니다. slug는 영문 파스칼케이스이며 JSON 외 텍스트를 출력하지 마세요.
+	prompt := `직접 실행하고 가지고 놀 수 있는 프로젝트 주제 3개를 추천하세요. 세 주제는 서로 다른 프로젝트 유형과 핵심 개념을 사용하고, 이론·구조 실험, 현실 사례형 시스템, 게임·시뮬레이션·비유 중 최소 두 방식을 섞어야 합니다. 각 주제는 HOLE과 BUG 과제로 평가할 수 있어야 합니다. pastTopics와 의미상 겹치는 주제 및 이름만 바꾼 변형을 제외하세요. creativeLens는 아이디어의 출발점으로만 사용하세요. slug는 영문 파스칼케이스이며 JSON 외 텍스트를 출력하지 마세요.
 
 ` + data
 	text, err := c.generateStructured(ctx, topicsSystemPrompt, prompt, topicsSchema())

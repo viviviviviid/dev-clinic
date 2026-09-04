@@ -16,6 +16,9 @@ func configureWSTest(t *testing.T) string {
 	config.Global.Supabase.URL = "https://project.supabase.co"
 	config.Global.Supabase.JWTSecret = "websocket-test-secret"
 	t.Setenv("ALLOWED_USER_ID", "")
+	t.Setenv("ALLOWED_USER_IDS", "")
+	t.Setenv("ALLOWED_USER_EMAIL", "")
+	t.Setenv("ALLOWED_USER_EMAILS", "")
 	t.Setenv("ALLOWED_ORIGINS", "")
 	t.Cleanup(func() { *config.Global = previous })
 
@@ -89,6 +92,8 @@ func TestSanitizedEnv(t *testing.T) {
 		"HOME=/tmp/home",
 		"GEMINI_API_KEY=secret",
 		"SUPABASE_JWT_SECRET=secret",
+		"ALLOWED_USER_IDS=user-123",
+		"ALLOWED_USER_EMAILS=user@example.com",
 		"SOME_TOKEN=secret",
 		"DATABASE_URL=postgres://secret",
 		"REDIS_URL=redis://secret",

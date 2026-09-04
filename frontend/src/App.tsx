@@ -534,7 +534,7 @@ export default function App() {
         ? '로컬 clinic에 연결할 수 없습니다'
         : 'clinic 요청을 처리하지 못했습니다'
     const guidance = isAccessError
-      ? '허용된 이메일 계정으로 다시 로그인하고 clinic의 ALLOWED_USER_ID를 확인하세요.'
+      ? '허용된 Google 계정으로 다시 로그인하고 clinic의 ALLOWED_USER_EMAILS 또는 ALLOWED_USER_IDS를 확인하세요.'
       : clinicError.kind === 'connection'
         ? 'clinic 실행 여부, Chrome 사이트 설정의 로컬 네트워크 액세스 권한, clinic의 ALLOWED_ORIGINS를 확인하세요.'
         : clinicError.kind === 'parse'

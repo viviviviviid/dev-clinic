@@ -20,17 +20,20 @@ func configureAuthTest(t *testing.T) {
 	config.Global.Supabase.JWTSecret = testJWTSecret
 	t.Setenv("ALLOWED_USER_ID", "")
 	t.Setenv("ALLOWED_USER_IDS", "")
+	t.Setenv("ALLOWED_USER_EMAIL", "")
+	t.Setenv("ALLOWED_USER_EMAILS", "")
 	t.Cleanup(func() { *config.Global = previous })
 }
 
 func signedTestToken(t *testing.T, mutate func(jwt.MapClaims)) string {
 	t.Helper()
 	claims := jwt.MapClaims{
-		"iss":  "https://project.supabase.co/auth/v1",
-		"aud":  "authenticated",
-		"role": "authenticated",
-		"sub":  "user-123",
-		"exp":  time.Now().Add(time.Hour).Unix(),
+		"iss":   "https://project.supabase.co/auth/v1",
+		"aud":   "authenticated",
+		"role":  "authenticated",
+		"sub":   "user-123",
+		"email": "user@example.com",
+		"exp":   time.Now().Add(time.Hour).Unix(),
 	}
 	if mutate != nil {
 		mutate(claims)
@@ -109,6 +112,37 @@ func TestValidateTokenRejectsMalformedAllowedUsers(t *testing.T) {
 
 	if _, err := ValidateToken(signedTestToken(t, nil)); err == nil {
 		t.Fatal("ValidateToken() treated a malformed non-empty allowlist as unrestricted")
+	}
+}
+
+func TestValidateTokenHonorsAllowedEmails(t *testing.T) {
+	configureAuthTest(t)
+	t.Setenv("ALLOWED_USER_EMAILS", "another@example.com, USER@example.com")
+
+	if _, err := ValidateToken(signedTestToken(t, nil)); err != nil {
+		t.Fatalf("ValidateToken() rejected an allowed email: %v", err)
+	}
+
+	if _, err := ValidateToken(signedTestToken(t, func(claims jwt.MapClaims) {
+		claims["email"] = "unlisted@example.com"
+	})); err == nil {
+		t.Fatal("ValidateToken() accepted an unlisted email")
+	}
+
+	if _, err := ValidateToken(signedTestToken(t, func(claims jwt.MapClaims) {
+		delete(claims, "email")
+	})); err == nil {
+		t.Fatal("ValidateToken() accepted a token without an email")
+	}
+}
+
+func TestValidateTokenAllowsIDOrEmailMatch(t *testing.T) {
+	configureAuthTest(t)
+	t.Setenv("ALLOWED_USER_IDS", "user-123")
+	t.Setenv("ALLOWED_USER_EMAILS", "another@example.com")
+
+	if _, err := ValidateToken(signedTestToken(t, nil)); err != nil {
+		t.Fatalf("ValidateToken() rejected an allowed user ID: %v", err)
 	}
 }
 

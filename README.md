@@ -6,7 +6,7 @@
 
 ```text
 Vercel (frontend/dist)
-  ├─ Supabase Auth: 이메일 매직링크 로그인
+  ├─ Supabase Auth: Google OAuth 로그인
   └─ HTTPS → http/ws://127.0.0.1:47291
                   clinic
                   ├─ Codex CLI 또는 Gemini
@@ -43,7 +43,7 @@ model = "gemini-3.6-flash"
 - Go 1.25+
 - Node.js 24 LTS 및 npm
 - Codex CLI와 ChatGPT 로그인(기본 모드)
-- Supabase 프로젝트(Email Auth, 설정·미션 DB)
+- Supabase 프로젝트(Google OAuth, 설정·미션 DB)
 - Chrome 권장: 최초 접속 시 로컬 네트워크 권한을 허용해야 합니다.
 
 학습 프로젝트를 실행·테스트할 언어 도구도 Mac에 미리 설치해야 합니다. clinic은 패키지를 자동 설치하지 않으며 Node 도구는 `npx --no-install`로만 실행합니다.
@@ -71,6 +71,7 @@ model = "gemini-3.6-flash"
 
 ```bash
 cp config.toml.example config.toml
+cp .env.example .env.local
 cp frontend/.env.example frontend/.env
 ```
 
@@ -100,10 +101,12 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
 
-혼자만 쓰도록 계정을 고정하려면 clinic 실행 환경에 Supabase 사용자 UUID를 지정합니다.
+허용할 Google 계정을 `.env.local`에 지정합니다. 이메일은 대소문자를 구분하지 않으며 여러 개는 쉼표로 구분합니다. 기존 UUID allowlist도 함께 지원하며 둘 중 하나가 일치하면 통과합니다.
 
-```bash
-ALLOWED_USER_IDS=first-user-uuid,second-user-uuid ./bin/clinic ~/learning
+```dotenv
+ALLOWED_USER_EMAILS=first@example.com,second@example.com
+# 선택형 기존 방식
+ALLOWED_USER_IDS=first-user-uuid,second-user-uuid
 ```
 
 ## Supabase 스키마
@@ -160,20 +163,20 @@ create policy "daily missions are private" on daily_missions
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 ```
 
-Supabase Authentication의 URL Configuration에서 Vercel production URL을 Site URL과 Redirect URLs에 등록하세요. 혼자 쓰는 설치는 사용할 이메일 계정을 먼저 만든 뒤 신규 가입을 비활성화하고, 허용할 사용자 UUID를 쉼표로 구분한 `ALLOWED_USER_IDS`로 고정합니다. 기존 단일 사용자용 `ALLOWED_USER_ID`도 계속 지원합니다.
+Supabase Authentication에서 Google provider를 활성화하고 Google OAuth client ID/secret을 등록하세요. URL Configuration의 Site URL과 Redirect URLs에는 Vercel production URL을 등록합니다. clinic은 `ALLOWED_USER_EMAILS` 또는 기존 `ALLOWED_USER_IDS`로 최종 접근을 제한합니다. 단일 값용 `ALLOWED_USER_EMAIL`과 `ALLOWED_USER_ID`도 지원합니다.
 
 ## 개발과 빌드
 
 ```bash
 npm --prefix frontend ci
-make dev DIR=~/learning
+make dev
 
 make test
 make build
-./bin/clinic ~/learning
+./run.sh
 ```
 
-개발 화면은 `http://localhost:5173`, clinic은 `http://127.0.0.1:47291`입니다. Vercel 기본 도메인(`https://<project>.vercel.app`)이나 다른 custom domain을 쓰면 해당 production origin을 `ALLOWED_ORIGINS=https://your-domain.example` 형태로 clinic 실행 환경에 추가합니다.
+인자를 생략하면 학습 프로젝트는 Git에서 제외된 저장소의 `data/` 아래에 저장됩니다. 다른 위치를 사용하려면 `./run.sh ~/learning` 또는 `make dev DIR=~/learning`처럼 지정합니다. 개발 화면은 `http://localhost:5173`, clinic은 `http://127.0.0.1:47291`입니다. Vercel 기본 도메인(`https://<project>.vercel.app`)이나 다른 custom domain을 쓰면 해당 production origin을 `ALLOWED_ORIGINS=https://your-domain.example` 형태로 clinic 실행 환경에 추가합니다.
 
 ## Vercel 배포
 
