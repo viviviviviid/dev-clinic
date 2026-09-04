@@ -159,7 +159,7 @@ func TestPublishExplicitTestResultCompletesOnlyFullSuite(t *testing.T) {
 	if len(testResults) != 4 || !testResults[1] || !testResults[2] || testResults[3] {
 		t.Fatalf("full-suite test results = %#v", testResults)
 	}
-	if len(completions) != 3 || !completions[0] || completions[1] || completions[2] {
+	if len(completions) != 3 || !completions[0] || !completions[1] || completions[2] {
 		t.Fatalf("full-suite completions = %#v", completions)
 	}
 	for _, got := range projectDirs {
@@ -265,7 +265,7 @@ func TestRunTestBroadcastsSuccessAndFailure(t *testing.T) {
 		wantComplete bool
 	}{
 		{name: "success", exitCode: "0", wantPassed: true, wantComplete: true},
-		{name: "success with unresolved marker", exitCode: "0", wantPassed: true, marker: "// [TUTOR:BUG]\n"},
+		{name: "success with marker annotation", exitCode: "0", wantPassed: true, marker: "// [TUTOR:BUG]\n", wantComplete: true},
 		{name: "failure", exitCode: "3"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -315,10 +315,10 @@ func TestRunTestBroadcastsSuccessAndFailure(t *testing.T) {
 					t.Fatalf("broadcast project dir = %q, want %q", got, resolvedRoot)
 				}
 			}
-			if tt.marker != "" && !strings.Contains(response.Body.String(), "미해결 학습 마커 1개") {
+			if tt.marker != "" && !strings.Contains(response.Body.String(), "학습 범위 marker 1개") {
 				t.Fatalf("completion summary missing from SSE: %q", response.Body.String())
 			}
-			if tt.marker != "" && (len(gotSummary) != 1 || !strings.Contains(gotSummary[0], "미해결 학습 마커 1개")) {
+			if tt.marker != "" && (len(gotSummary) != 1 || !strings.Contains(gotSummary[0], "학습 범위 marker 1개")) {
 				t.Fatalf("completion summary missing from test_result: %#v", gotSummary)
 			}
 		})

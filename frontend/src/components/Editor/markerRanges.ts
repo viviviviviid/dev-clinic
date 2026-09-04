@@ -85,6 +85,39 @@ export function findTutorMarkerLineRange(
   }
 }
 
+// Prefer the body of a marked function or block. This keeps declarations,
+// braces, and the marker comments in place when a learner starts typing.
+export function findTutorMarkerEditLineRange(
+  content: string,
+  markerType: TutorMarkerType,
+  markerIndex: number,
+): TutorMarkerLineRange | null {
+  const target = markerRangeAtIndex(content, markerType, markerIndex)
+  if (!target) return null
+
+  const lines = content.split('\n')
+  let start = target.start + 1
+  let end = target.end - 1
+  while (start <= end && lines[start].trim() === '') start++
+  while (end >= start && lines[end].trim() === '') end--
+  if (start > end) return null
+
+  const first = lines[start].trim()
+  const last = lines[end].trim()
+  if (first.includes('{') && last === '}') {
+    start++
+    end--
+    while (start <= end && lines[start].trim() === '') start++
+    while (end >= start && lines[end].trim() === '') end--
+  }
+  if (start > end) return null
+
+  return {
+    startLineNumber: start + 1,
+    endLineNumber: end + 1,
+  }
+}
+
 export function replaceTutorMarkerAtIndex(
   content: string,
   markerType: TutorMarkerType,

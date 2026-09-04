@@ -24,7 +24,7 @@ import ConceptPanel from './ConceptPanel'
 import './Editor.css'
 import { apiFetch, apiJson } from '../../lib/api'
 import { getErrorMessage, isAbortError } from '../../lib/errors'
-import { findTutorMarkerLineRange } from './markerRanges'
+import { findTutorMarkerEditLineRange } from './markerRanges'
 import {
   createEditorAutosave,
   installEditorAutosaveLifecycle,
@@ -1175,7 +1175,7 @@ export default function Editor() {
     const ed = editorRef.current
     const model = ed?.getModel()
     if (!ed || !model) return
-    const markerRange = findTutorMarkerLineRange(
+    const markerRange = findTutorMarkerEditLineRange(
       model.getValue(),
       markerType === 'bug' ? 'bug' : 'hole',
       markerIndex,

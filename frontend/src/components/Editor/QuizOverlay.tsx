@@ -263,7 +263,7 @@ function HintCard({
         </div>
 
         <p className="quiz-verification-note" id={`${cardId}-verification-note`}>
-          선택된 범위를 에디터에서 직접 바꾸세요. ⌘Z/Ctrl+Z로 되돌릴 수 있고, 수정 후 전체 테스트로 확인합니다.
+          함수 틀은 그대로 두고 선택된 본문만 에디터에서 바꾸세요. ⌘Z/Ctrl+Z로 되돌린 뒤 전체 테스트로 확인할 수 있습니다.
         </p>
 
         {/* 힌트 섹션 */}

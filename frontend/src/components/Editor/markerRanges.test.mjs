@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { findTutorMarkerLineRange, replaceTutorMarkerAtIndex } from './markerRanges.ts'
+import { findTutorMarkerEditLineRange, findTutorMarkerLineRange, replaceTutorMarkerAtIndex } from './markerRanges.ts'
 
 test('finds the complete marker range for direct editor editing', () => {
   const content = `func total() int {
@@ -15,6 +15,19 @@ test('finds the complete marker range for direct editor editing', () => {
     endLineNumber: 4,
   })
   assert.equal(findTutorMarkerLineRange(content, 'bug', 0), null)
+})
+
+test('selects only the function body when a marker wraps a legacy function', () => {
+  const content = `// [TUTOR:HOLE] initialize state
+func create() *Thing {
+  return &Thing{}
+}
+// [TUTOR:END]`
+
+  assert.deepEqual(findTutorMarkerEditLineRange(content, 'hole', 0), {
+    startLineNumber: 3,
+    endLineNumber: 3,
+  })
 })
 
 test('replaces a multiline Go HOLE range including both markers', () => {

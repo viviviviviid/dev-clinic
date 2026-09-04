@@ -159,6 +159,11 @@ three := 3
 four := 4
 five := 5
 // [TUTOR:END]`,
+		"function declaration wrapped": `// [TUTOR:HOLE]
+func create() int {
+	return 0
+}
+// [TUTOR:END]`,
 	}
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -174,7 +179,7 @@ five := 5
 }
 
 func TestCodeGenerationPromptKeepsTasksSmallAndUnsolved(t *testing.T) {
-	for _, want := range []string{"현재 단계 과제", "정답 코드", "최대 4줄", "독립 marker"} {
+	for _, want := range []string{"현재 단계 과제", "정답 코드", "최대 4줄", "독립 marker", "선언부와 중괄호"} {
 		if !strings.Contains(codeFilesSystemPrompt, want) {
 			t.Fatalf("code generation prompt is missing %q", want)
 		}

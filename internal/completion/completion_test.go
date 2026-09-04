@@ -34,17 +34,17 @@ func TestEvaluateRequiresPassingTestsAndResolvedMarkers(t *testing.T) {
 
 	writeTestFile(t, filepath.Join(projectDir, "main.go"), "package main\n// [TUTOR:HOLE]\n// [TUTOR:BUG]\n")
 	result = Evaluate(base, projectDir, true)
-	if result.Complete || result.HoleCount != 1 || result.BugCount != 1 {
-		t.Fatalf("unresolved-marker result = %+v", result)
+	if !result.Complete || result.HoleCount != 1 || result.BugCount != 1 {
+		t.Fatalf("marker-annotation result = %+v", result)
 	}
-	if !strings.Contains(result.Summary(), "미해결 학습 마커 2개") {
+	if !strings.Contains(result.Summary(), "학습 범위 marker 2개") {
 		t.Fatalf("marker summary = %q", result.Summary())
 	}
 
 	writeTestFile(t, filepath.Join(projectDir, "main.go"), "package main\n// [TUTOR:END]\n")
 	result = Evaluate(base, projectDir, true)
-	if result.Complete || result.HoleCount != 0 || result.BugCount != 0 || result.EndCount != 1 {
-		t.Fatalf("orphan-end result = %+v", result)
+	if !result.Complete || result.HoleCount != 0 || result.BugCount != 0 || result.EndCount != 1 {
+		t.Fatalf("marker-annotation result = %+v", result)
 	}
 	if !strings.Contains(result.Summary(), "END/범위 종료 1") {
 		t.Fatalf("orphan-end summary = %q", result.Summary())

@@ -169,7 +169,11 @@ func evaluate(baseDir, projectDir string, testsPassed bool, scanLimits limits) R
 		return result
 	}
 
-	result.Complete = testsPassed && result.HoleCount == 0 && result.BugCount == 0 && result.EndCount == 0
+	// Markers are durable editor annotations now: learners edit the marked body
+	// in place, so a passing full test suite is the completion evidence. Requiring
+	// the marker comments to be deleted would force them to replace a whole
+	// function just to advance.
+	result.Complete = testsPassed
 	return result
 }
 
@@ -187,7 +191,7 @@ func (r Result) Summary() string {
 		return "단계 완료 확인 실패: 소스 마커를 안전하게 검사하지 못했습니다 (" + r.ScanErr.Error() + ")"
 	}
 	markerSummary := fmt.Sprintf(
-		"미해결 학습 마커 %d개 (HOLE %d, BUG %d, END/범위 종료 %d)",
+		"학습 범위 marker %d개 (HOLE %d, BUG %d, END/범위 종료 %d)",
 		r.HoleCount+r.BugCount+r.EndCount,
 		r.HoleCount,
 		r.BugCount,

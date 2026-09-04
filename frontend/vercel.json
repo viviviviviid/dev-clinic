@@ -1,4 +1,5 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "headers": [
     {
       "source": "/assets/(.*)",
@@ -41,7 +42,7 @@
       "destination": "/privacy.html"
     },
     {
-      "source": "/(.*)",
+      "source": "/:path((?!assets/).*)",
       "destination": "/index.html"
     }
   ]

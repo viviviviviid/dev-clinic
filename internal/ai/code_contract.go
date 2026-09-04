@@ -111,6 +111,7 @@ func parseTutorMarkerRanges(comment, filename, content string) ([]tutorMarkerRan
 	openLine := -1
 	hasBody := false
 	bodyLines := 0
+	bodyContent := make([]string, 0, maxTutorMarkerBodyLines)
 
 	for i, line := range lines {
 		kind, present, err := parseTutorMarkerLine(comment, line)
@@ -123,6 +124,7 @@ func parseTutorMarkerRanges(comment, filename, content string) ([]tutorMarkerRan
 				if trimmed != "" && !strings.HasPrefix(trimmed, comment) {
 					hasBody = true
 					bodyLines++
+					bodyContent = append(bodyContent, trimmed)
 				}
 			}
 			continue
@@ -137,6 +139,7 @@ func parseTutorMarkerRanges(comment, filename, content string) ([]tutorMarkerRan
 			openLine = i
 			hasBody = false
 			bodyLines = 0
+			bodyContent = bodyContent[:0]
 		case "end":
 			if openKind == "" {
 				return nil, fmt.Errorf("marker %s:%d has no matching HOLE or BUG start", filename, i+1)
@@ -147,17 +150,39 @@ func parseTutorMarkerRanges(comment, filename, content string) ([]tutorMarkerRan
 			if bodyLines > maxTutorMarkerBodyLines {
 				return nil, fmt.Errorf("marker range %s:%d-%d has %d code lines; maximum is %d", filename, openLine+1, i+1, bodyLines, maxTutorMarkerBodyLines)
 			}
+			if markerWrapsFunctionBody(bodyContent) {
+				return nil, fmt.Errorf("marker range %s:%d-%d must be inside a function or block body, not wrap its declaration", filename, openLine+1, i+1)
+			}
 			ranges = append(ranges, tutorMarkerRange{Kind: openKind, StartLine: openLine, EndLine: i})
 			openKind = ""
 			openLine = -1
 			hasBody = false
 			bodyLines = 0
+			bodyContent = bodyContent[:0]
 		}
 	}
 	if openKind != "" {
 		return nil, fmt.Errorf("marker %s:%d is missing a matching %s [TUTOR:END] line", filename, openLine+1, comment)
 	}
 	return ranges, nil
+}
+
+func markerWrapsFunctionBody(lines []string) bool {
+	if len(lines) < 2 || strings.TrimSpace(lines[len(lines)-1]) != "}" {
+		return false
+	}
+	first := strings.TrimSpace(lines[0])
+	openBrace := strings.Index(first, "{")
+	if openBrace < 0 {
+		return false
+	}
+	declaration := strings.TrimSpace(first[:openBrace])
+	return strings.HasPrefix(declaration, "func ") ||
+		strings.HasPrefix(declaration, "fn ") ||
+		strings.HasPrefix(declaration, "pub fn ") ||
+		strings.HasPrefix(declaration, "function ") ||
+		strings.HasPrefix(declaration, "def ") ||
+		strings.Contains(declaration, "=>")
 }
 
 func parseTutorMarkerLine(comment, line string) (string, bool, error) {

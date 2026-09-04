@@ -16,6 +16,18 @@ function findOrCreateRoot(): HTMLElement {
 
 const root = createRoot(findOrCreateRoot())
 
+// A browser can keep an old entry chunk open while a Vercel deployment removes
+// one of its lazy-loaded Monaco language chunks. Reload once into the current
+// deployment instead of leaving the editor in a broken partial state.
+const staleChunkReloadKey = 'clinic:stale-chunk-reload'
+window.addEventListener('vite:preloadError', event => {
+  if (sessionStorage.getItem(staleChunkReloadKey) === '1') return
+  sessionStorage.setItem(staleChunkReloadKey, '1')
+  event.preventDefault()
+  window.location.reload()
+})
+window.setTimeout(() => sessionStorage.removeItem(staleChunkReloadKey), 5_000)
+
 function renderBootError(error: unknown) {
   root.render(
     <StrictMode>

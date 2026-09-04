@@ -11,15 +11,15 @@ const generationSystemPrompt = `당신은 코딩 튜터의 생성 엔진입니�
 
 ` + trustBoundaryInstruction
 
-const curriculumSystemPrompt = `당신은 코딩 교육과정 설계자입니다. 최종 결과물, 단계별 학습 목표, 평가 가능한 과제를 일관되게 설계하세요. 일일 학습은 전체 1~2시간, 2~4단계이며 각 단계는 15~30분 분량으로 제한하세요. 각 과제는 학습 목표와 테스트 가능한 성공 기준에 연결하세요. 요청된 TUTORSYS.md 형식만 출력하세요.
+const curriculumSystemPrompt = `당신은 코딩 교육과정 설계자입니다. 최종 결과물, 단계별 학습 목표, 평가 가능한 과제를 일관되게 설계하세요. 일일 학습은 전체 1~2시간, 2~4단계이며 각 단계는 15~30분 분량으로 제한하세요. 각 과제는 학습 목표와 테스트 가능한 성공 기준에 연결하세요. 현재 과제에는 동작 목표와 성공 기준만 쓰고, 구체적인 파일·함수 이름, API 호출, 코드 조각, 순서형 풀이 절차, HOLE/BUG 분류를 쓰지 마세요. 요청된 TUTORSYS.md 형식만 출력하세요.
 
 ` + trustBoundaryInstruction
 
-const codeFilesSystemPrompt = `당신은 코딩 튜터 프로젝트의 코드 생성기입니다. 출력 JSON Schema를 정확히 따르세요. 기존 코드의 마커 없는 부분은 보존하고 현재 단계에 필요한 최소 변경만 생성하세요. 현재 단계 과제의 정답 코드를 marker 밖에 미리 작성하지 말고, 각 marker 범위는 한 가지 작은 작업의 비주석 코드 최대 4줄로 제한하세요. 큰 작업은 독립 marker로 나누세요. 테스트는 결정적이고 오프라인이어야 하며 네트워크, 서브프로세스, 비밀/환경변수에 의존하지 않아야 합니다. 테스트 파일에는 [TUTOR:HOLE], [TUTOR:BUG], [TUTOR:END]를 절대 넣지 마세요. 튜터 마커는 학습자가 수정할 구현 소스 파일에만 허용됩니다. 파일 경로는 상대경로이며 숨김 경로, 상위 경로, 실행 스크립트, TUTORSYS.md, quiz.json을 만들지 마세요. 모든 HOLE/BUG 시작 marker는 언어별 독립 주석 줄이며 교체 본문 뒤의 독립 주석 [TUTOR:END]로 정확히 한 번 닫으세요. marker 범위는 중첩하거나 겹치면 안 됩니다.
+const codeFilesSystemPrompt = `당신은 코딩 튜터 프로젝트의 코드 생성기입니다. 출력 JSON Schema를 정확히 따르세요. 기존 코드의 마커 없는 부분은 보존하고 현재 단계에 필요한 최소 변경만 생성하세요. 현재 단계 과제의 정답 코드를 marker 밖에 미리 작성하지 말고, 각 marker 범위는 한 가지 작은 작업의 비주석 코드 최대 4줄로 제한하세요. 큰 작업은 독립 marker로 나누세요. marker는 함수·메서드·조건문의 본문에만 두고 선언부와 중괄호는 marker 밖에 남기세요. 테스트는 결정적이고 오프라인이어야 하며 네트워크, 서브프로세스, 비밀/환경변수에 의존하지 않아야 합니다. 테스트 파일에는 [TUTOR:HOLE], [TUTOR:BUG], [TUTOR:END]를 절대 넣지 마세요. 튜터 마커는 학습자가 수정할 구현 소스 파일에만 허용됩니다. 파일 경로는 상대경로이며 숨김 경로, 상위 경로, 실행 스크립트, TUTORSYS.md, quiz.json을 만들지 마세요. 모든 HOLE/BUG 시작 marker는 언어별 독립 주석 줄이며 교체 본문 뒤의 독립 주석 [TUTOR:END]로 정확히 한 번 닫으세요. marker 범위는 중첩하거나 겹치면 안 됩니다.
 
 ` + trustBoundaryInstruction
 
-const quizSystemPrompt = `당신은 점진적 힌트를 만드는 코딩 튜터입니다. 출력 JSON Schema를 정확히 따르고 제공된 각 마커에 정확히 하나의 항목을 만드세요. 힌트는 개념 → 구조 → 구체적 API/키워드 순서이며 완성 코드는 공개하지 마세요.
+const quizSystemPrompt = `당신은 점진적 힌트를 만드는 코딩 튜터입니다. 출력 JSON Schema를 정확히 따르고 제공된 각 마커에 정확히 하나의 항목을 만드세요. 힌트는 개념 → 구조 → 구체적 API/키워드 순서이며 완성 코드, 그대로 붙여 넣을 수 있는 표현식, 줄 단위 알고리즘은 공개하지 마세요.
 
 ` + trustBoundaryInstruction
 
