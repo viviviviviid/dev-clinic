@@ -15,6 +15,8 @@ import { ApiError, LOCAL, apiFetch, apiJson, subscribeApiAuthFailure } from './l
 import { readClampedNumber, writePreference } from './lib/storage'
 import { isAbortError } from './lib/errors'
 import { COMPACT_WORKSPACE_WIDTH, workspaceLayout } from './lib/workspaceLayout'
+import { describeClinicFailure } from './lib/clinicFailure'
+import type { ClinicFailure } from './lib/clinicFailure'
 
 const DashboardScreen = lazy(() => import('./components/Dashboard'))
 const Editor = lazy(() => import('./components/Editor'))
@@ -30,15 +32,9 @@ const SKILL_BADGE: Record<string, string> = {
   experienced: '🔥 숙련자',
 }
 
-interface ClinicFailure {
-  message: string
-  kind: 'auth' | 'connection' | 'http' | 'parse' | 'unknown'
-  status: number | null
-}
-
 function clinicFailureFrom(error: unknown): ClinicFailure {
   if (error instanceof ApiError) {
-    return { message: error.message, kind: error.kind, status: error.status }
+    return { message: error.message, kind: error.kind, status: error.status, code: error.code }
   }
   return {
     message: error instanceof Error ? error.message : '로컬 clinic 요청에 실패했습니다.',
@@ -141,6 +137,7 @@ export default function App() {
   const [userSettings, setUserSettingsLocal] = useState<UserSettings | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(false)
   const [clinicError, setClinicError] = useState<ClinicFailure | null>(null)
+  const [retryingClinic, setRetryingClinic] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [problemsOpen, setProblemsOpen] = useState(false)
@@ -196,6 +193,7 @@ export default function App() {
   const settingsRequestRef = useRef<AbortController | null>(null)
   const missionReadyAbortRef = useRef<AbortController | null>(null)
   const lastAccessTokenRef = useRef<string | null>(null)
+  const retryingClinicRef = useRef(false)
 
   const onSidebarResize = useResize('horizontal', useCallback((delta: number) => {
     setSidebarWidth(Math.max(120, Math.min(480, sidebarRef.current + delta)))
@@ -236,7 +234,7 @@ export default function App() {
   useWebSocket(Boolean(user && userSettings && !clinicError), wsRetryKey)
 
   useEffect(() => subscribeApiAuthFailure((failure) => {
-    setClinicError({ message: failure.message, kind: 'auth', status: failure.status })
+    setClinicError({ message: failure.message, kind: 'auth', status: failure.status, code: failure.code })
   }), [])
 
   // Global keyboard shortcuts
@@ -408,9 +406,21 @@ export default function App() {
   }, [requestSettings, resetWorkspace, setUser, setUserSettings, stopActiveWatcher])
 
   async function retryClinicConnection() {
+    if (retryingClinicRef.current) return
+    retryingClinicRef.current = true
+    setRetryingClinic(true)
     try {
-      const { data, error } = await supabase.auth.getSession()
-      if (error) throw error
+      const refreshLogin = clinicError !== null && describeClinicFailure(clinicError).sessionError
+      const { data, error } = refreshLogin
+        ? await supabase.auth.refreshSession()
+        : await supabase.auth.getSession()
+      if (error) {
+        if (refreshLogin) {
+          setClinicError({ message: '로그인 정보를 갱신하지 못했습니다. Google 계정으로 다시 로그인해 주세요.', kind: 'auth', status: 401 })
+          return
+        }
+        throw error
+      }
       if (!data.session) {
         setClinicError({ message: '로그인 세션이 없습니다. 다시 로그인해 주세요.', kind: 'auth', status: 401 })
         return
@@ -418,6 +428,9 @@ export default function App() {
       await requestSettings(data.session.user.id, data.session.access_token)
     } catch (error: unknown) {
       setClinicError(clinicFailureFrom(error))
+    } finally {
+      retryingClinicRef.current = false
+      setRetryingClinic(false)
     }
   }
 
@@ -545,33 +558,21 @@ export default function App() {
   }
 
   if (clinicError) {
-    const isAccessError = clinicError.status === 401 || clinicError.status === 403 || clinicError.kind === 'auth'
-    const title = isAccessError
-      ? '이 계정으로 clinic을 사용할 수 없습니다'
-      : clinicError.kind === 'connection'
-        ? '로컬 clinic에 연결할 수 없습니다'
-        : 'clinic 요청을 처리하지 못했습니다'
-    const guidance = isAccessError
-      ? '허용된 Google 계정으로 다시 로그인하고 clinic의 ALLOWED_USER_EMAILS 또는 ALLOWED_USER_IDS를 확인하세요.'
-      : clinicError.kind === 'connection'
-        ? 'clinic 실행 여부, Chrome 사이트 설정의 로컬 네트워크 액세스 권한, clinic의 ALLOWED_ORIGINS를 확인하세요.'
-        : clinicError.kind === 'parse'
-          ? '화면과 clinic을 같은 버전으로 다시 빌드한 뒤 재시도하세요.'
-          : 'clinic 로그와 Supabase·AI 공급자 설정을 확인한 뒤 재시도하세요.'
+    const { title, guidance, retryLabel } = describeClinicFailure(clinicError)
 
     return (
       <div className="loading-screen" role="alert">
         <div className="clinic-error-card">
           <h2>{title}</h2>
-          <p>{clinicError.message}</p>
+          {user.email && <p className="clinic-account">로그인 계정 <strong>{user.email}</strong></p>}
           <p>{guidance}</p>
-          {!isAccessError && <p><code>{LOCAL}</code></p>}
+          <details className="clinic-error-details"><summary>오류 상세</summary><p>{clinicError.message}</p><code>{LOCAL}</code></details>
           <div className="clinic-error-actions">
-            <button className="clinic-error-primary" type="button" onClick={() => void retryClinicConnection()}>
-              다시 연결
+            <button className="clinic-error-primary" type="button" disabled={retryingClinic} onClick={() => void retryClinicConnection()}>
+              {retryingClinic ? '확인 중…' : retryLabel}
             </button>
-            <button type="button" onClick={() => void switchClinicAccount()}>
-              {isAccessError ? '로그아웃 / 계정 전환' : '로그아웃'}
+            <button type="button" disabled={retryingClinic} onClick={() => void switchClinicAccount()}>
+              로그아웃 / 계정 전환
             </button>
           </div>
         </div>

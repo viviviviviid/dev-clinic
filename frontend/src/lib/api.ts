@@ -14,6 +14,7 @@ export class ApiError extends Error {
   readonly kind: ApiErrorKind
   readonly status: number | null
   readonly details?: unknown
+  readonly code?: string
 
   constructor(message: string, options: { kind: ApiErrorKind; status?: number; details?: unknown; cause?: unknown }) {
     super(message, { cause: options.cause })
@@ -21,6 +22,7 @@ export class ApiError extends Error {
     this.kind = options.kind
     this.status = options.status ?? null
     this.details = options.details
+    this.code = errorCode(options.details)
   }
 }
 
@@ -32,6 +34,7 @@ interface ApiFetchOptions extends RequestInit {
 export interface ApiAuthFailure {
   status: 401 | 403
   message: string
+  code?: string
 }
 
 const authFailureListeners = new Set<(failure: ApiAuthFailure) => void>()
@@ -41,8 +44,14 @@ export function subscribeApiAuthFailure(listener: (failure: ApiAuthFailure) => v
   return () => authFailureListeners.delete(listener)
 }
 
-function notifyAuthFailure(status: 401 | 403, message: string) {
-  for (const listener of authFailureListeners) listener({ status, message })
+function notifyAuthFailure(status: 401 | 403, message: string, code?: string) {
+  for (const listener of authFailureListeners) listener({ status, message, code })
+}
+
+function errorCode(details: unknown): string | undefined {
+  if (!details || typeof details !== 'object') return undefined
+  const code = (details as Record<string, unknown>).code
+  return typeof code === 'string' ? code : undefined
 }
 
 function apiUrl(path: string): string {
@@ -121,7 +130,7 @@ export async function apiFetch(path: string, options: ApiFetchOptions = {}): Pro
     const details = await readErrorBody(response)
     const message = errorMessage(response.status, details)
     if (response.status === 401 || response.status === 403) {
-      notifyAuthFailure(response.status, message)
+      notifyAuthFailure(response.status, message, errorCode(details))
     }
     throw new ApiError(message, {
       kind: 'http',

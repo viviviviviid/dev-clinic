@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -169,5 +170,49 @@ func TestAuthMiddleware(t *testing.T) {
 	router.ServeHTTP(res, req)
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("missing token status = %d, want %d", res.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAuthDistinguishesInvalidSessionFromDeniedIdentity(t *testing.T) {
+	configureAuthTest(t)
+	t.Setenv("ALLOWED_USER_EMAILS", "user@example.com")
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(Auth())
+	router.GET("/protected", func(c *gin.Context) { c.Status(http.StatusOK) })
+	tests := []struct {
+		name   string
+		token  string
+		status int
+		code   string
+	}{
+		{"allowed account", signedTestToken(t, nil), http.StatusOK, ""},
+		{"unlisted account", signedTestToken(t, func(c jwt.MapClaims) { c["email"] = "unlisted@example.com" }), http.StatusForbidden, "account_not_allowed"},
+		{"expired allowed account", signedTestToken(t, func(c jwt.MapClaims) { c["exp"] = time.Now().Add(-time.Minute).Unix() }), http.StatusUnauthorized, "invalid_token"},
+		{"expired unlisted account", signedTestToken(t, func(c jwt.MapClaims) {
+			c["email"] = "unlisted@example.com"
+			c["exp"] = time.Now().Add(-time.Minute).Unix()
+		}), http.StatusUnauthorized, "invalid_token"},
+		{"invalid signature", signedTestToken(t, nil) + "broken", http.StatusUnauthorized, "invalid_token"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			req.Header.Set("Authorization", "Bearer "+tt.token)
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, req)
+			if res.Code != tt.status {
+				t.Fatalf("status = %d, want %d", res.Code, tt.status)
+			}
+			if tt.code != "" {
+				var body map[string]string
+				if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["code"] != tt.code {
+					t.Fatalf("error code = %q, want %q", body["code"], tt.code)
+				}
+			}
+		})
 	}
 }

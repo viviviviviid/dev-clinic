@@ -35,10 +35,11 @@ type jwksResponse struct {
 }
 
 var (
-	cachedKeys    []jwkKey
-	cachedKeysAt  time.Time
-	cachedKeysURL string
-	keysMu        sync.RWMutex
+	ErrIdentityNotAllowed = errors.New("token identity is not allowed")
+	cachedKeys            []jwkKey
+	cachedKeysAt          time.Time
+	cachedKeysURL         string
+	keysMu                sync.RWMutex
 )
 
 const maxJWKSResponseBytes = 1 << 20
@@ -188,7 +189,7 @@ func ValidateToken(tokenString string) (string, error) {
 	}
 	email, _ := claims["email"].(string)
 	if !isAllowedUser(userID, email) {
-		return "", errors.New("token identity is not allowed")
+		return "", ErrIdentityNotAllowed
 	}
 
 	return userID, nil
@@ -235,7 +236,11 @@ func Auth() gin.HandlerFunc {
 		userID, err := ValidateToken(tokenStr)
 		if err != nil {
 			log.Printf("auth: JWT error: %v", err)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			if errors.Is(err, ErrIdentityNotAllowed) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "이 Google 계정은 clinic에서 허용되지 않았습니다.", "code": "account_not_allowed"})
+			} else {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "로그인 정보를 확인하지 못했습니다. 로그인 정보를 갱신하거나 다시 로그인해 주세요.", "code": "invalid_token"})
+			}
 			return
 		}
 
