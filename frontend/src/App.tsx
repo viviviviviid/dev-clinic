@@ -14,6 +14,7 @@ import './App.css'
 import { ApiError, LOCAL, apiFetch, apiJson, subscribeApiAuthFailure } from './lib/api'
 import { readClampedNumber, writePreference } from './lib/storage'
 import { isAbortError } from './lib/errors'
+import { COMPACT_WORKSPACE_WIDTH, workspaceLayout } from './lib/workspaceLayout'
 
 const DashboardScreen = lazy(() => import('./components/Dashboard'))
 const Editor = lazy(() => import('./components/Editor'))
@@ -143,7 +144,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [problemsOpen, setProblemsOpen] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 900)
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > COMPACT_WORKSPACE_WIDTH)
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
   const [wsRetryKey, setWsRetryKey] = useState(0)
   const [leavingProject, setLeavingProject] = useState(false)
@@ -159,16 +160,33 @@ export default function App() {
   })
   const [terminalHeight, setTerminalHeight] = useState(240)
   const [problemsHeight, setProblemsHeight] = useState(180)
+  const panelLayout = workspaceLayout(viewportWidth, showSearchPanel ? 280 : sidebarOpen ? sidebarWidth : 0, feedbackWidth)
 
   useEffect(() => {
     writePreference('feedbackWidth', feedbackWidth)
   }, [feedbackWidth])
 
   useEffect(() => {
-    const onResize = () => setViewportWidth(window.innerWidth)
+    let previousWidth = window.innerWidth
+    const onResize = () => {
+      const width = window.innerWidth
+      if (previousWidth > COMPACT_WORKSPACE_WIDTH && width <= COMPACT_WORKSPACE_WIDTH) {
+        setSidebarOpen(false)
+        setShowSearchPanel(false)
+      }
+      previousWidth = width
+      setViewportWidth(width)
+    }
     window.addEventListener('resize', onResize, { passive: true })
     return () => window.removeEventListener('resize', onResize)
-  }, [])
+  }, [setShowSearchPanel])
+
+  const toggleSidebar = useCallback(() => {
+    if (showSearchPanel) {
+      setShowSearchPanel(false)
+      setSidebarOpen(true)
+    } else setSidebarOpen((open) => !open)
+  }, [showSearchPanel, setShowSearchPanel])
 
   const sidebarRef = useRef(sidebarWidth)
   const feedbackRef = useRef(feedbackWidth)
@@ -196,14 +214,14 @@ export default function App() {
   }, []))
 
   const makeSidebarDown = useCallback((e: React.MouseEvent) => {
-    sidebarRef.current = sidebarWidth
+    sidebarRef.current = panelLayout.leftWidth
     onSidebarResize(e)
-  }, [sidebarWidth, onSidebarResize])
+  }, [panelLayout.leftWidth, onSidebarResize])
 
   const makeFeedbackDown = useCallback((e: React.MouseEvent) => {
-    feedbackRef.current = feedbackWidth
+    feedbackRef.current = panelLayout.feedbackWidth
     onFeedbackResize(e)
-  }, [feedbackWidth, onFeedbackResize])
+  }, [panelLayout.feedbackWidth, onFeedbackResize])
 
   const makeTerminalDown = useCallback((e: React.MouseEvent) => {
     terminalRef.current = terminalHeight
@@ -238,12 +256,12 @@ export default function App() {
       }
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'b') {
         e.preventDefault()
-        setSidebarOpen((v) => !v)
+        toggleSidebar()
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [showSearchPanel, setShowQuickOpen, setShowSearchPanel])
+  }, [showSearchPanel, setShowQuickOpen, setShowSearchPanel, toggleSidebar])
 
   const loadSettings = useCallback(async (
     ownerId: string,
@@ -622,21 +640,24 @@ export default function App() {
       {connectionBanner}
       <div className="app-main">
         {showSearchPanel && (
-          <div className="app-search-panel">
+          <div className="app-search-panel" style={{ width: panelLayout.leftWidth }}>
             <Suspense fallback={<LoadingFallback label="검색 패널 로딩 중..." />}>
               <SearchPanel />
             </Suspense>
           </div>
         )}
-        {sidebarOpen && (
+        {sidebarOpen && !showSearchPanel && (
           <>
-            <div className="app-sidebar" style={{ width: sidebarWidth }}>
+            <div className="app-sidebar" style={{ width: panelLayout.leftWidth }}>
+              {viewportWidth <= COMPACT_WORKSPACE_WIDTH && (
+                <button className="workspace-panel-close" onClick={() => setSidebarOpen(false)}>파일 탐색기 닫기 ✕</button>
+              )}
               <FileTree />
             </div>
             <ResizerHandle
               direction="horizontal"
               onMouseDown={makeSidebarDown}
-              onKeyDelta={(delta) => setSidebarWidth((width) => Math.max(120, Math.min(480, width + delta)))}
+              onKeyDelta={(delta) => setSidebarWidth(Math.max(120, Math.min(480, panelLayout.leftWidth + delta)))}
               label="파일 트리 너비 조절"
             />
           </>
@@ -685,11 +706,11 @@ export default function App() {
         <ResizerHandle
           direction="horizontal"
           onMouseDown={makeFeedbackDown}
-          onKeyDelta={(delta) => setFeedbackWidth((width) => Math.max(160, Math.min(600, width - delta)))}
+          onKeyDelta={(delta) => setFeedbackWidth(Math.max(160, Math.min(600, panelLayout.feedbackWidth - delta)))}
           label="피드백 패널 너비 조절"
         />
 
-        <div className="app-feedback" style={{ width: feedbackWidth }}>
+        <div className="app-feedback" style={{ width: panelLayout.feedbackWidth }}>
           <Suspense fallback={<LoadingFallback label="피드백 패널 로딩 중..." />}>
             <FeedbackPanel />
           </Suspense>
@@ -703,8 +724,8 @@ export default function App() {
           terminalOpen={terminalOpen}
           onProblemsToggle={() => setProblemsOpen((v) => !v)}
           problemsOpen={problemsOpen}
-          onSidebarToggle={() => setSidebarOpen((v) => !v)}
-          sidebarOpen={sidebarOpen}
+          onSidebarToggle={toggleSidebar}
+          sidebarOpen={sidebarOpen && !showSearchPanel}
           onSettingsOpen={() => setShowSettings(true)}
           onBackToDashboard={handleBackToDashboard}
           onSignOut={handleSignOut}

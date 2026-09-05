@@ -109,6 +109,7 @@ export default function SearchPanel() {
           <input
             ref={inputRef}
             className="search-panel-input"
+            aria-label="프로젝트에서 검색할 내용"
             placeholder="프로젝트 검색..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -116,7 +117,7 @@ export default function SearchPanel() {
               if (e.key === 'Escape') setShowSearchPanel(false)
             }}
           />
-          <button className="search-panel-close" onClick={() => setShowSearchPanel(false)}>✕</button>
+          <button aria-label="검색 패널 닫기" className="search-panel-close" onClick={() => setShowSearchPanel(false)}>✕</button>
         </div>
         {totalMatches > 0 && (
           <div className="search-panel-summary">{totalMatches}개 결과</div>
@@ -129,7 +130,9 @@ export default function SearchPanel() {
         )}
         {results.map((group) => (
           <div key={group.absPath} className="search-group">
-            <div
+            <button
+              type="button"
+              aria-expanded={!collapsed.has(group.absPath)}
               className="search-group-header"
               onClick={() => toggleCollapse(group.absPath)}
             >
@@ -145,10 +148,12 @@ export default function SearchPanel() {
                   : ''}
               </span>
               <span className="search-group-count">({group.matches.length})</span>
-            </div>
+            </button>
             {!collapsed.has(group.absPath) && group.matches.map((m, i) => (
-              <div
+              <button
+                type="button"
                 key={i}
+                aria-label={`${group.relPath} ${m.lineNum}행: ${m.lineContent.trim()}`}
                 className="search-result-item"
                 onClick={() => openResult(m.absPath, m.lineNum)}
               >
@@ -156,7 +161,7 @@ export default function SearchPanel() {
                 <span className="search-result-content">
                   {highlightLine(m.lineContent.trim(), query, m.colStart - (m.lineContent.length - m.lineContent.trimStart().length))}
                 </span>
-              </div>
+              </button>
             ))}
           </div>
         ))}

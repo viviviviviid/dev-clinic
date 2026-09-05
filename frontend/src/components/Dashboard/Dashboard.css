@@ -362,6 +362,78 @@
   gap: 0.5rem;
 }
 
+.resume-mission {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #d8dee8;
+}
+
+.resume-mission-copy {
+  flex: 1;
+  min-width: 180px;
+}
+
+.resume-mission-label {
+  color: #0066cc;
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.resume-mission h2 {
+  font-size: clamp(20px, 2vw, 26px);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  margin-bottom: 8px;
+}
+
+.resume-mission-copy > p:last-child,
+.resume-width-note {
+  font-size: 14px;
+  color: #596273;
+}
+
+.resume-mission-btn {
+  min-height: 44px;
+  padding: 10px 20px;
+  background: #0066cc;
+  border: 1px solid #0066cc;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+}
+
+.resume-mission-btn:hover:not(:disabled) { background: #0055aa; }
+.resume-mission button:disabled { opacity: 0.6; cursor: not-allowed; }
+.resume-mission button:focus-visible,
+.resume-mission summary:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; }
+
+.resume-other-missions { width: 100%; }
+.resume-other-missions summary { cursor: pointer; color: #394456; font-size: 14px; }
+.resume-other-missions button {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+  padding: 12px 4px;
+  border: 0;
+  border-bottom: 1px solid #d8dee8;
+  background: transparent;
+  color: #1d1d1f;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.resume-other-missions small { color: #596273; }
+
 .calendar-header-actions {
   display: flex;
   align-items: center;

@@ -38,10 +38,12 @@ interface TreeNodeProps {
   entry: FileEntry
   rootDir: string
   depth: number
-  onContextMenu: (e: React.MouseEvent, fullPath: string, name: string, isDir: boolean) => void
+  focusedPath: string
+  onFocusPath: (path: string) => void
+  onContextMenu: (e: React.MouseEvent | React.KeyboardEvent, fullPath: string, name: string, isDir: boolean) => void
 }
 
-function TreeNode({ entry, rootDir, depth, onContextMenu }: TreeNodeProps) {
+function TreeNode({ entry, rootDir, depth, focusedPath, onFocusPath, onContextMenu }: TreeNodeProps) {
   const [open, setOpen] = useState(depth === 0)
   const { openFile, addTab, changedFiles, addToast } = useStore()
   const { readFile } = useProject()
@@ -65,12 +67,44 @@ function TreeNode({ entry, rootDir, depth, onContextMenu }: TreeNodeProps) {
   const isActive = openFile === fullPath
   const isChanged = changedFiles.has(fullPath)
 
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget || event.nativeEvent.isComposing) return
+    const node = event.currentTarget
+    const items = Array.from(node.closest('[role="tree"]')?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])
+    const index = items.indexOf(node)
+    let target: HTMLElement | undefined | null
+    if (event.key === 'ArrowDown') target = items[Math.min(index + 1, items.length - 1)]
+    else if (event.key === 'ArrowUp') target = items[Math.max(index - 1, 0)]
+    else if (event.key === 'Home') target = items[0]
+    else if (event.key === 'End') target = items.at(-1)
+    else if (event.key === 'ArrowRight') {
+      if (entry.isDir && !open) setOpen(true)
+      else target = node.querySelector<HTMLElement>('[role="group"] > [role="treeitem"]')
+    } else if (event.key === 'ArrowLeft') {
+      if (entry.isDir && open) setOpen(false)
+      else target = node.parentElement?.closest<HTMLElement>('[role="treeitem"]')
+    } else if (event.key === 'Enter' || event.key === ' ') void handleClick()
+    else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+      onContextMenu(event, fullPath, entry.name, entry.isDir)
+    } else return
+    event.preventDefault()
+    event.stopPropagation()
+    target?.focus()
+  }
+
   return (
-    <div className="tree-node">
+    <div className="tree-node" role="treeitem" aria-label={entry.name}
+      aria-expanded={entry.isDir ? open : undefined} aria-selected={isActive}
+      aria-level={depth + 1} tabIndex={focusedPath === entry.path ? 0 : -1}
+      onFocus={(event) => { if (event.target === event.currentTarget) onFocusPath(entry.path) }}
+      onKeyDown={handleKeyDown}>
       <div
         className={`tree-item ${isActive ? 'active' : ''} ${entry.isDir ? 'dir' : ''}`}
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
-        onClick={handleClick}
+        onClick={(event) => {
+          event.currentTarget.parentElement?.focus()
+          void handleClick()
+        }}
         onContextMenu={(e) => onContextMenu(e, fullPath, entry.name, entry.isDir)}
       >
         <span className="tree-icon">
@@ -83,13 +117,15 @@ function TreeNode({ entry, rootDir, depth, onContextMenu }: TreeNodeProps) {
         {isChanged && <span className="changed-dot" />}
       </div>
       {entry.isDir && open && entry.children && (
-        <div className="tree-children">
+        <div className="tree-children" role="group">
           {entry.children.map((child) => (
             <TreeNode
               key={child.path}
               entry={child}
               rootDir={rootDir}
               depth={depth + 1}
+              focusedPath={focusedPath}
+              onFocusPath={onFocusPath}
               onContextMenu={onContextMenu}
             />
           ))}
@@ -127,6 +163,11 @@ export default function FileTree() {
   const [ctxMenu, setCtxMenu] = useState<ContextMenu | null>(null)
   const [renaming, setRenaming] = useState<{ path: string; name: string; isDir: boolean } | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const menuTriggerRef = useRef<HTMLElement | null>(null)
+  const [focusedPath, setFocusedPath] = useState('')
+  const hasPath = (entries: FileEntry[]): boolean => entries.some((entry) => entry.path === focusedPath || hasPath(entry.children ?? []))
+  const focusPath = hasPath(fileTree) ? focusedPath : fileTree[0]?.path ?? ''
 
   // Close context menu on outside click
   useEffect(() => {
@@ -137,13 +178,25 @@ export default function FileTree() {
   }, [ctxMenu])
 
   useEffect(() => {
-    if (renaming) renameInputRef.current?.select()
+    if (renaming) {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
+    }
   }, [renaming])
 
-  function handleContextMenu(e: React.MouseEvent, fullPath: string, name: string, isDir: boolean) {
+  useEffect(() => {
+    if (ctxMenu) menuRef.current?.querySelector('button')?.focus()
+  }, [ctxMenu])
+
+  function handleContextMenu(e: React.MouseEvent | React.KeyboardEvent, fullPath: string, name: string, isDir: boolean) {
     e.preventDefault()
     e.stopPropagation()
-    setCtxMenu({ x: e.clientX, y: e.clientY, fullPath, name, isDir })
+    menuTriggerRef.current = e.currentTarget.closest<HTMLElement>('[role="treeitem"]')
+    menuTriggerRef.current?.focus()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = 'clientX' in e ? e.clientX : rect.left + 24
+    const y = 'clientY' in e ? e.clientY : rect.top + 28
+    setCtxMenu({ x: Math.min(x, window.innerWidth - 160), y: Math.min(y, window.innerHeight - 100), fullPath, name, isDir })
   }
 
   function startRename() {
@@ -239,29 +292,46 @@ export default function FileTree() {
       <div className="filetree-header">
         <span>탐색기</span>
       </div>
-      <div className="filetree-content">
+      <div className="filetree-content" role="tree" aria-label="프로젝트 파일" aria-describedby="filetree-keyboard-help">
         {fileTree.map((entry) => (
           <TreeNode
             key={entry.path}
             entry={entry}
             rootDir={dir}
             depth={0}
+            focusedPath={focusPath}
+            onFocusPath={setFocusedPath}
             onContextMenu={handleContextMenu}
           />
         ))}
       </div>
+      <p className="filetree-keyboard-help" id="filetree-keyboard-help">↑↓ 이동 · Enter 열기 · Shift+F10 메뉴</p>
 
       {/* Context menu */}
       {ctxMenu && (
         <div
+          ref={menuRef}
           className="filetree-ctx-menu"
+          role="menu" aria-label={`${ctxMenu.name} 작업`}
           style={{ top: ctxMenu.y, left: ctxMenu.x }}
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={(event) => {
+            const buttons = Array.from(menuRef.current?.querySelectorAll('button') ?? [])
+            if (event.key === 'Escape' || event.key === 'Tab') {
+              event.preventDefault()
+              setCtxMenu(null)
+              menuTriggerRef.current?.focus()
+            } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault()
+              const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+              buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus()
+            }
+          }}
         >
-          <button className="ctx-menu-item" onClick={startRename}>
+          <button className="ctx-menu-item" role="menuitem" onClick={startRename}>
             ✏️ 이름 변경
           </button>
-          <button className="ctx-menu-item ctx-menu-danger" onClick={handleDelete}>
+          <button className="ctx-menu-item ctx-menu-danger" role="menuitem" onClick={handleDelete}>
             🗑 삭제
           </button>
         </div>

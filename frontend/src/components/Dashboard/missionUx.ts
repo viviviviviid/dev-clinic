@@ -1,5 +1,14 @@
 export const MIN_EDITOR_WIDTH = 680
 
+export function resumableMissions<T extends { project_dir: string; date: string; status: string }>(
+  history: T[], today: T[],
+): T[] {
+  const unique = new Map([...history, ...today].map((mission) => [mission.project_dir, mission]))
+  return [...unique.values()]
+    .filter((mission) => mission.status === 'active')
+    .sort((a, b) => b.date.localeCompare(a.date) || a.project_dir.localeCompare(b.project_dir))
+}
+
 export function dailyIntroStorageKey(userID: string): string {
   return `coding-tutor.daily-intro.${userID}`
 }

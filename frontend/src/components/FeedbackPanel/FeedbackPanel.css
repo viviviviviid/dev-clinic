@@ -202,16 +202,14 @@
 }
 
 .tasks-section-title {
-  font-size: 11px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #8b949e;
+  color: #e6edf3;
   margin: 0 0 10px;
 }
 
 .tasks-goal {
-  font-size: 13px;
+  font-size: 16px;
   color: #e6edf3;
   line-height: 1.6;
   margin: 0 0 10px;
@@ -240,7 +238,7 @@
 }
 
 .tasks-concept {
-  font-size: 13px;
+  font-size: 16px;
   color: #c9d1d9;
   line-height: 1.7;
 }
@@ -265,12 +263,12 @@
 .tasks-concept pre code { background: none; padding: 0; color: #e6edf3; }
 
 .tasks-list {
-  font-size: 13px;
+  font-size: 16px;
   color: #c9d1d9;
   line-height: 1.7;
 }
 .tasks-list h3 {
-  font-size: 12px;
+  font-size: 15px;
   color: #e6edf3;
   margin: 10px 0 6px;
 }
@@ -510,15 +508,15 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #484f58;
-  font-size: 14px;
+  color: #8b949e;
+  font-size: 15px;
   text-align: center;
   gap: 4px;
 }
 
 .feedback-empty-hint {
-  font-size: 12px;
-  color: #30363d;
+  font-size: 13px;
+  color: #8b949e;
 }
 
 .feedback-history-limit {
@@ -736,40 +734,33 @@
   border-radius: 10px;
 }
 
-/* ── 진행률 바 ── */
+/* Current position is separate from completion. */
 .tasks-progress-section {
-  padding-bottom: 4px;
-}
-
-.tasks-progress-header {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .tasks-progress-label {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
-  color: #58a6ff;
+  color: #79c0ff;
 }
 
-.tasks-progress-pct {
-  font-size: 11px;
-  color: #6e7681;
+.tasks-reference summary {
+  cursor: pointer;
+  margin-bottom: 0;
 }
 
-.tasks-progress-bar {
-  height: 6px;
-  background: #21262d;
-  border-radius: 3px;
-  overflow: hidden;
+.tasks-reference[open] summary {
+  margin-bottom: 12px;
 }
 
-.tasks-progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #1f6feb, #58a6ff);
-  border-radius: 3px;
-  transition: width 0.4s ease;
+.tasks-reference summary:focus-visible {
+  outline: 2px solid #79c0ff;
+  outline-offset: 4px;
 }
 
 @media (max-width: 900px) {

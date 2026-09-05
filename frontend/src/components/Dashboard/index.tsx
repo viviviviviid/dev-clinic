@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { MissionFinalizePendingError, useProject } from '../../hooks/useProject'
 import type { PendingMissionFinalize, TopicSuggestion } from '../../hooks/useProject'
 import { useStore } from '../../store'
@@ -13,6 +13,7 @@ import {
   describeMissionGeneration,
   isEditorWidthReady,
   readPendingMissionFinalize,
+  resumableMissions,
   writePendingMissionFinalize,
 } from './missionUx'
 import './Dashboard.css'
@@ -93,6 +94,8 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
 
   const [todayMissions, setTodayMissions] = useState<MissionRecord[]>([])
   const [allHistory, setAllHistory] = useState<MissionRecord[]>([])
+  const activeMissions = useMemo(() => resumableMissions(allHistory, todayMissions), [allHistory, todayMissions])
+  const latestMission = activeMissions[0]
   const [loading, setLoading] = useState(true)
   const [loadingMissionId, setLoadingMissionId] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -176,9 +179,9 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     setNurseChatSuggestedTopics([])
     setNurseChatHistory([{
       role: 'nurse',
-      content: todayMissions.length > 0
-        ? `오늘 훈련이 ${todayMissions.length}개 있어요. 이어서 진행하거나 AI에게 새 주제를 추천받을 수 있어요.`
-        : '아직 오늘의 훈련이 없어요. 준비되면 AI에게 새 주제를 추천받아 보세요.',
+      content: activeMissions.length > 0
+        ? `진행 중인 미션이 ${activeMissions.length}개 있어요. 이어서 진행하거나 AI에게 새 주제를 추천받을 수 있어요.`
+        : '진행 중인 미션이 없어요. 준비되면 AI에게 새 주제를 추천받아 보세요.',
     }])
   }
 
@@ -197,7 +200,6 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     schedule(() => {
       setVnVisible(false)
       setVnFading(false)
-      if (!testModeActive) showMissionMenu()
     }, 420)
   }
 
@@ -361,15 +363,18 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
   useEffect(() => {
     if (!nurseChatVisible || nurseChatMode !== 'mission-select') return
     function handler(e: KeyboardEvent) {
-      if (e.key === 'ArrowUp') {
+      if (e.isComposing || (e.target instanceof HTMLElement && e.target.closest('input, textarea'))) return
+      const focusedButton = e.target instanceof HTMLElement ? e.target.closest('button') : null
+      if (e.key === 'Enter' && focusedButton) return
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        if (focusedButton && !focusedButton.hasAttribute('data-mission-index')) return
         e.preventDefault()
-        setNurseMissionSelIdx(prev => Math.max(0, prev - 1))
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setNurseMissionSelIdx(prev => Math.min(todayMissions.length - 1, prev + 1))
+        const next = Math.max(0, Math.min(activeMissions.length - 1, nurseMissionSelIdx + (e.key === 'ArrowDown' ? 1 : -1)))
+        setNurseMissionSelIdx(next)
+        nurseDialogRef.current?.querySelector<HTMLButtonElement>(`[data-mission-index="${next}"]`)?.focus()
       } else if (e.key === 'Enter') {
         e.preventDefault()
-        const m = todayMissions[nurseMissionSelIdx]
+        const m = activeMissions[nurseMissionSelIdx]
         if (m) selectMissionRef.current(m)
       } else if (e.key === 'Escape') {
         setNurseChatMode('choice')
@@ -377,14 +382,15 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [nurseChatVisible, nurseChatMode, nurseMissionSelIdx, todayMissions])
+  }, [nurseChatVisible, nurseChatMode, nurseMissionSelIdx, activeMissions])
 
   // 키보드: choice 모드 (1=기존, 2=새로운)
   useEffect(() => {
     if (!nurseChatVisible || nurseChatMode !== 'choice') return
     function handler(e: KeyboardEvent) {
+      if (e.isComposing || (e.target instanceof HTMLElement && e.target.closest('input, textarea'))) return
       if (e.key === '1') {
-        if (todayMissions.length > 0) {
+        if (activeMissions.length > 0) {
           setNurseChatMode('mission-select')
           setNurseMissionSelIdx(0)
         } else {
@@ -393,7 +399,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
           setNurseChatHistory([])
           setNurseRequestNotice('AI 추천 1회를 요청했습니다.')
         }
-      } else if (e.key === '2' && todayMissions.length > 0) {
+      } else if (e.key === '2' && activeMissions.length > 0) {
         sendNurseMessageRef.current('__init__', [])
         setNurseChatMode('chat')
         setNurseChatHistory([])
@@ -402,7 +408,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [nurseChatVisible, nurseChatMode, todayMissions.length])
+  }, [nurseChatVisible, nurseChatMode, activeMissions.length])
 
   useEffect(() => {
     function handleResize() {
@@ -1037,9 +1043,9 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
               {nurseChatMode === 'choice' && (
                 <div className="nurse-chat-topics">
                   <div className="nurse-chat-topics-label">
-                    {todayMissions.length > 0 ? '어떻게 할까요? (1 / 2)' : '새 미션 준비'}
+                    {activeMissions.length > 0 ? '어떻게 할까요? (1 / 2)' : '새 미션 준비'}
                   </div>
-                  {todayMissions.length > 0 && (
+                  {activeMissions.length > 0 && (
                     <button
                       type="button"
                       className="nurse-chat-topic-btn"
@@ -1055,24 +1061,26 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
                     className="nurse-chat-topic-btn"
                     onClick={requestNurseRecommendations}
                   >
-                    <span className="nurse-chat-diff diff-high">{todayMissions.length > 0 ? '2' : '1'}</span>
+                    <span className="nurse-chat-diff diff-high">{activeMissions.length > 0 ? '2' : '1'}</span>
                     <span className="nurse-chat-topic-name">AI에게 새 미션 추천받기</span>
                     <span className="nurse-chat-topic-arrow">AI 추천 1회 →</span>
                   </button>
                 </div>
               )}
 
-              {/* mission-select 모드: 오늘 미션 키보드 선택 */}
+              {/* mission-select 모드: 진행 중 미션 키보드 선택 */}
               {nurseChatMode === 'mission-select' && (
                 <div className="nurse-chat-topics">
-                  <div className="nurse-chat-topics-label">오늘의 훈련 — ↑↓ 선택, Enter 시작, Esc 뒤로</div>
-                  {todayMissions.map((m, i) => (
+                  <div className="nurse-chat-topics-label">진행 중인 미션 — ↑↓ 이동, Enter 시작</div>
+                  {activeMissions.map((m, i) => (
                     <button
                       type="button"
                       key={m.id}
+                      data-mission-index={i}
                       className={`nurse-chat-topic-btn${nurseMissionSelIdx === i ? ' selected' : ''}`}
                       onClick={() => { closeNurseChat(); schedule(() => void handleLoadMission(m), 350) }}
                       onMouseEnter={() => setNurseMissionSelIdx(i)}
+                      onFocus={() => setNurseMissionSelIdx(i)}
                     >
                       <span className={`nurse-chat-diff ${m.status === 'completed' ? 'diff-low' : 'diff-mid'}`}>
                         {m.status === 'completed' ? '완료' : '진행'}
@@ -1142,6 +1150,36 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
            ref={calendarRef}
            style={vnVisible ? { filter: 'blur(5px)', pointerEvents: 'none' } : undefined}
          >
+          {latestMission && (
+            <section className="resume-mission" aria-labelledby="resume-heading">
+              <div className="resume-mission-copy">
+                <p className="resume-mission-label" id="resume-heading">이어서 학습</p>
+                <h2>{latestMission.topic}</h2>
+                <p>{latestMission.date} 시작 · 진행 중</p>
+              </div>
+              <button
+                className="resume-mission-btn"
+                type="button"
+                disabled={loadingMissionId !== null || !editorWidthReady}
+                onClick={() => void handleLoadMission(latestMission)}
+              >
+                {loadingMissionId === latestMission.id ? '미션 여는 중…' : '이어서 학습 →'}
+              </button>
+              {activeMissions.length > 1 && (
+                <details className="resume-other-missions">
+                  <summary>다른 진행 중 미션 {activeMissions.length - 1}개</summary>
+                  {activeMissions.slice(1).map((mission) => (
+                    <button key={mission.id} type="button"
+                      disabled={loadingMissionId !== null || !editorWidthReady}
+                      onClick={() => void handleLoadMission(mission)}>
+                      <span>{mission.topic}</span><small>{mission.date} 시작</small>
+                    </button>
+                  ))}
+                </details>
+              )}
+              {!editorWidthReady && <p className="resume-width-note">이어서 학습하려면 창 너비를 {MIN_EDITOR_WIDTH}px 이상으로 늘려주세요.</p>}
+            </section>
+          )}
           {/* Month navigation */}
           <div className="calendar-header-row">
             <div className="calendar-month-label">
@@ -1213,4 +1251,3 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
     </div>
   )
 }
-

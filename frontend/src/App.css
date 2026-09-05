@@ -34,8 +34,20 @@ body {
 }
 
 .app-sidebar {
+  display: flex;
+  flex-direction: column;
   flex-shrink: 0;
   overflow: hidden;
+}
+
+.workspace-panel-close {
+  flex-shrink: 0;
+  min-height: 36px;
+  border: 0;
+  border-bottom: 1px solid #30363d;
+  color: #c9d1d9;
+  background: #161b22;
+  cursor: pointer;
 }
 
 /* Editor column: monaco (flex) + terminal (fixed height) */
@@ -352,6 +364,10 @@ body {
 }
 
 .search-group-header {
+  border: 0;
+  width: 100%;
+  text-align: left;
+  font: inherit;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -386,6 +402,10 @@ body {
 }
 
 .search-result-item {
+  border: 0;
+  width: 100%;
+  text-align: left;
+  background: transparent;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -394,6 +414,13 @@ body {
   font-family: 'SF Mono', 'Fira Code', monospace;
 }
 .search-result-item:hover { background: #1c2128; }
+
+.search-group-header:focus-visible,
+.search-result-item:focus-visible,
+.workspace-panel-close:focus-visible {
+  outline: 2px solid #79c0ff;
+  outline-offset: -2px;
+}
 
 .search-result-linenum {
   font-size: 11px;
