@@ -1,9 +1,14 @@
 package middleware
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +23,22 @@ func configureAuthTest(t *testing.T) {
 	t.Helper()
 	previous := *config.Global
 	config.Global.Supabase.URL = "https://project.supabase.co"
-	config.Global.Supabase.JWTSecret = testJWTSecret
+	config.Global.Supabase.AnonKey = "sb_publishable_test"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/v1/user" || r.Header.Get("apikey") != "sb_publishable_test" {
+			http.Error(w, "wrong auth request", http.StatusBadRequest)
+			return
+		}
+		claims := jwt.MapClaims{}
+		token, err := jwt.ParseWithClaims(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), claims, func(token *jwt.Token) (interface{}, error) { return []byte(testJWTSecret), nil }, jwt.WithValidMethods([]string{"HS256"}))
+		if err != nil || !token.Valid {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": claims["sub"]})
+	}))
+	t.Cleanup(server.Close)
+	config.Global.Supabase.URL = server.URL
 	t.Setenv("ALLOWED_USER_ID", "")
 	t.Setenv("ALLOWED_USER_IDS", "")
 	t.Setenv("ALLOWED_USER_EMAIL", "")
@@ -29,7 +49,7 @@ func configureAuthTest(t *testing.T) {
 func signedTestToken(t *testing.T, mutate func(jwt.MapClaims)) string {
 	t.Helper()
 	claims := jwt.MapClaims{
-		"iss":   "https://project.supabase.co/auth/v1",
+		"iss":   config.Global.Supabase.URL + "/auth/v1",
 		"aud":   "authenticated",
 		"role":  "authenticated",
 		"sub":   "user-123",
@@ -214,5 +234,54 @@ func TestAuthDistinguishesInvalidSessionFromDeniedIdentity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateES256WithPublicJWKS(t *testing.T) {
+	configureAuthTest(t)
+	private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/v1/.well-known/jwks.json" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"keys": []map[string]string{{
+			"kty": "EC", "kid": "test-key", "alg": "ES256", "crv": "P-256",
+			"x": base64.RawURLEncoding.EncodeToString(private.X.FillBytes(make([]byte, 32))),
+			"y": base64.RawURLEncoding.EncodeToString(private.Y.FillBytes(make([]byte, 32))),
+		}}})
+	}))
+	defer server.Close()
+	config.Global.Supabase.URL = server.URL
+	claims := jwt.MapClaims{"iss": server.URL + "/auth/v1", "aud": "authenticated", "role": "authenticated", "sub": "user-123", "exp": time.Now().Add(time.Hour).Unix()}
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token.Header["kid"] = "test-key"
+	signed, err := token.SignedString(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user, err := ValidateToken(signed); err != nil || user != "user-123" {
+		t.Fatalf("public verification failed: %s %v", user, err)
+	}
+	if _, err := ValidateToken(signed + "tampered"); err == nil {
+		t.Fatal("invalid ES256 signature accepted")
+	}
+}
+
+func TestHS256FailsClosedWhenAuthIsUnavailableOrIdentityDiffers(t *testing.T) {
+	configureAuthTest(t)
+	for _, status := range []int{http.StatusUnauthorized, http.StatusServiceUnavailable, http.StatusOK} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"id":"different-user"}`))
+		}))
+		config.Global.Supabase.URL = server.URL
+		if _, err := ValidateToken(signedTestToken(t, nil)); err == nil {
+			t.Errorf("accepted invalid auth response %d", status)
+		}
+		server.Close()
 	}
 }

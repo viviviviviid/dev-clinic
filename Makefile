@@ -3,7 +3,7 @@
 DIR ?= $(CURDIR)/data
 
 dev-be:
-	go run ./cmd/clinic $(DIR)
+	CLINIC_SITE_URL=http://localhost:5173 go run ./cmd/clinic "$(DIR)"
 
 dev-fe:
 	cd frontend && npm run dev
@@ -27,7 +27,9 @@ lint:
 
 dev:
 	@echo "Starting local server on :47291 and frontend on :5173"
-	@go run ./cmd/clinic $(DIR) & clinic_pid=$$!; \
-	(cd frontend && npm run dev) & frontend_pid=$$!; \
+	@(cd frontend && npm run dev) & frontend_pid=$$!; \
+	trap 'kill $$frontend_pid 2>/dev/null; wait $$frontend_pid 2>/dev/null' EXIT INT TERM; \
+	curl --silent --show-error --fail --retry 10 --retry-delay 1 --retry-connrefused --max-time 2 http://localhost:5173/clinic-config.json >/dev/null || exit 1; \
+	CLINIC_SITE_URL=http://localhost:5173 go run ./cmd/clinic "$(DIR)" & clinic_pid=$$!; \
 	trap 'kill $$clinic_pid $$frontend_pid 2>/dev/null; wait $$clinic_pid $$frontend_pid 2>/dev/null' EXIT INT TERM; \
 	wait $$clinic_pid $$frontend_pid

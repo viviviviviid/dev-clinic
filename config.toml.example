@@ -1,6 +1,6 @@
-# 로컬 서버 설정 (선택사항 — 없어도 됨)
-# codex: 저장된 ChatGPT Codex CLI 로그인을 사용 (기본값)
-# gemini: GEMINI_API_KEY 필요
+# 로컬 고급 설정 (선택사항 — 일반 사용자는 이 파일을 복사할 필요가 없습니다)
+# ./run.sh ~/learning 만 실행하면 배포 사이트에서 공개 연결 정보를 가져옵니다.
+# 관리자 키(service_role/secret)와 JWT 서명 비밀키는 clinic에서 사용하지 않습니다.
 ai_provider = "codex"
 
 [codex]
@@ -10,16 +10,9 @@ executable = "codex"
 model = ""
 
 [gemini]
+# Gemini를 선택할 때만 개인 키가 필요합니다.
 api_key = ""
 model = "gemini-3.6-flash"
 
 [server]
 port = "47291"
-
-[supabase]
-url = "https://your-project.supabase.co"
-anon_key = "your-anon-key"
-# clinic 로컬 서버에만 두고 frontend/.env에는 넣지 마세요.
-service_role_key = "your-service-role-key"
-# Supabase Auth가 HS256을 쓸 때만 설정합니다. ES256은 JWKS로 검증합니다.
-jwt_secret = ""

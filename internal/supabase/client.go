@@ -2,6 +2,7 @@ package supabase
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +16,15 @@ import (
 
 const maxResponseBytes = 8 << 20 // 8 MiB
 
-var httpClient = &http.Client{Timeout: 20 * time.Second}
+var httpClient = config.PublicHTTPClient(20 * time.Second)
+
+type accessTokenKey struct{}
+
+// WithAccessToken attaches the verified caller's token to this request only.
+// Callers must authenticate before attaching credentials. Tokens are never global.
+func WithAccessToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, accessTokenKey{}, strings.TrimSpace(token))
+}
 
 // FilterValue escapes a value before it is interpolated into a PostgREST
 // filter expression such as "column=eq.<value>".
@@ -23,8 +32,8 @@ func FilterValue(value string) string {
 	return url.QueryEscape(value)
 }
 
-func Get(path string, result interface{}) error {
-	body, err := request(http.MethodGet, path, nil, "")
+func Get(ctx context.Context, path string, result interface{}) error {
+	body, err := request(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return err
 	}
@@ -34,34 +43,38 @@ func Get(path string, result interface{}) error {
 	return nil
 }
 
-func Insert(table string, data interface{}) error {
-	_, err := request(http.MethodPost, table, data, "return=minimal")
+func Insert(ctx context.Context, table string, data interface{}) error {
+	_, err := request(ctx, http.MethodPost, table, data, "return=minimal")
 	return err
 }
 
-func Patch(path string, data interface{}) error {
-	_, err := request(http.MethodPatch, path, data, "return=minimal")
+func Patch(ctx context.Context, path string, data interface{}) error {
+	_, err := request(ctx, http.MethodPatch, path, data, "return=minimal")
 	return err
 }
 
-func Delete(path string) error {
-	_, err := request(http.MethodDelete, path, nil, "")
+func Delete(ctx context.Context, path string) error {
+	_, err := request(ctx, http.MethodDelete, path, nil, "")
 	return err
 }
 
-func Upsert(table string, data interface{}) error {
-	_, err := request(http.MethodPost, table, data, "resolution=merge-duplicates,return=minimal")
+func Upsert(ctx context.Context, table string, data interface{}) error {
+	_, err := request(ctx, http.MethodPost, table, data, "resolution=merge-duplicates,return=minimal")
 	return err
 }
 
-func request(method, path string, data interface{}, prefer string) ([]byte, error) {
+func request(ctx context.Context, method, path string, data interface{}, prefer string) ([]byte, error) {
 	endpoint, err := endpoint(path)
 	if err != nil {
 		return nil, err
 	}
-	key := strings.TrimSpace(config.Global.Supabase.ServiceRoleKey)
-	if key == "" {
-		return nil, fmt.Errorf("supabase service role key is not configured")
+	key := strings.TrimSpace(config.Global.Supabase.AnonKey)
+	if err := config.ValidatePublicKey(key); err != nil {
+		return nil, err
+	}
+	token, _ := ctx.Value(accessTokenKey{}).(string)
+	if token == "" {
+		return nil, fmt.Errorf("supabase requires an authenticated user's access token")
 	}
 
 	var body io.Reader
@@ -73,12 +86,12 @@ func request(method, path string, data interface{}, prefer string) ([]byte, erro
 		body = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequest(method, endpoint, body)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return nil, fmt.Errorf("supabase create request: %w", err)
 	}
 	req.Header.Set("apikey", key)
-	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Authorization", "Bearer "+token)
 	if data != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

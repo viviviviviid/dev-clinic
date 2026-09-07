@@ -14,5 +14,11 @@ if [[ -f "$script_dir/.env.local" ]]; then
 fi
 
 project_dir="${1:-$script_dir/data}"
+# Resolve relative paths before entering the repository to build and read the
+# optional local overrides. A supplied directory always wins over BASE_DIR.
+if [[ "$project_dir" != /* && "$project_dir" != '~' && "$project_dir" != '~/'* ]]; then
+  project_dir="$PWD/$project_dir"
+fi
+cd "$script_dir"
 make build-be
-exec ./bin/clinic "$project_dir"
+exec "$script_dir/bin/clinic" "$project_dir"

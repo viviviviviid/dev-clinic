@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/coding-tutor/internal/config"
 	"github.com/coding-tutor/internal/middleware"
 	"github.com/gorilla/websocket"
 )
@@ -71,6 +72,9 @@ func allowedOrigin(r *http.Request) bool {
 		"https://clinic.abcfe.net": {},
 		"http://localhost:5173":    {},
 		"http://127.0.0.1:5173":    {},
+	}
+	if config.Global.SiteURL != "" {
+		allowed[config.Global.SiteURL] = struct{}{}
 	}
 	for _, configured := range strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",") {
 		if configured = strings.TrimSpace(configured); configured != "" {

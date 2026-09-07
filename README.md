@@ -6,13 +6,14 @@
 
 ```text
 Vercel (frontend/dist)
+  ├─ clinic-config.json: 공개 연결 정보 자동 제공
   ├─ Supabase Auth: Google OAuth 로그인
   └─ HTTPS → http/ws://127.0.0.1:47291
                   clinic
                   ├─ Codex CLI 또는 Gemini
                   ├─ 프로젝트 파일 / watcher / snapshot
                   ├─ run / test / LSP / terminal
-                  └─ Supabase REST: 설정·미션 기록
+                  └─ Supabase REST: 사용자 JWT + RLS로 설정·미션 기록
 ```
 
 홈서버는 필요하지 않습니다. Vercel 화면은 계속 열 수 있지만 프로젝트 생성·편집·AI 피드백을 사용할 때는 해당 Mac에서 `clinic`만 실행하면 됩니다. 외부에 포트를 열거나 24시간 켜둘 필요도 없습니다. `127.0.0.1`은 화면을 연 기기 자신을 뜻하므로 Vercel URL도 clinic이 실행 중인 같은 Mac의 Chrome에서 여세요. 휴대폰이나 다른 PC에서 연 화면은 Mac의 clinic에 연결되지 않습니다.
@@ -38,12 +39,22 @@ api_key = "..."
 model = "gemini-3.6-flash"
 ```
 
+## 일반 사용자 실행
+
+```bash
+codex login              # 처음 한 번
+./run.sh ~/learning       # 원하는 학습 파일 저장 경로
+```
+
+그다음 같은 Mac의 Chrome에서 https://tutor.abcfe.net 을 열고 Google로 로그인하세요. `config.toml`, `.env.local`, `frontend/.env`를 만들거나 Supabase 키를 입력할 필요가 없습니다. 인자를 생략하면 저장소의 `data/`를 사용합니다. 상대 경로와 공백이 있는 경로도 지원합니다 (`./run.sh "~/My Learning"`). 명시한 경로가 `BASE_DIR`보다 우선합니다.
+
+clinic은 시작할 때 배포 사이트의 `/clinic-config.json`에서 Supabase URL과 공개 키를 가져옵니다. 파일·실행·AI는 로컬에서 처리하고, DB는 웹에서 로그인한 사용자의 JWT로 접근하므로 사용자별 RLS가 적용됩니다. 이 구조에는 Supabase 관리자 키나 JWT 서명 비밀키가 필요하지 않습니다. 기존 `config.toml`/환경변수에 남아 있는 `service_role_key`, `jwt_secret`은 읽지 않습니다.
+
 ## 준비
 
 - Go 1.25+
-- Node.js 24 LTS 및 npm
+- Node.js 24 LTS 및 npm (Codex CLI 또는 JS/TS 학습에 사용)
 - Codex CLI와 ChatGPT 로그인(기본 모드)
-- Supabase 프로젝트(Google OAuth, 설정·미션 DB)
 - Chrome 권장: 최초 접속 시 로컬 네트워크 권한을 허용해야 합니다.
 
 학습 프로젝트를 실행·테스트할 언어 도구도 Mac에 미리 설치해야 합니다. clinic은 패키지를 자동 설치하지 않으며 Node 도구는 `npx --no-install`로만 실행합니다.
@@ -67,47 +78,30 @@ model = "gemini-3.6-flash"
 - 호출은 최소 15초 간격, 분당 최대 4회로 제한됩니다.
 - 새 미션 추천 역시 로비를 여는 것만으로 실행되지 않으며 `AI에게 새 미션 추천받기`를 눌러야 시작됩니다.
 
-## 로컬 설정
+## 배포자·프론트엔드 개발자 설정
+
+일반 사용자에게는 아래 설정 파일을 배포하지 않습니다. 서비스 운영자만 Supabase 프로젝트와 Google OAuth, 아래 DB 스키마를 준비합니다.
 
 ```bash
-cp config.toml.example config.toml
-cp .env.example .env.local
 cp frontend/.env.example frontend/.env
 ```
 
-`config.toml`에는 Supabase 서버 자격 증명을 넣습니다. `service_role_key`와 Gemini 키는 절대 `frontend/.env` 또는 `VITE_*` 변수에 넣지 마세요.
-
-```toml
-ai_provider = "codex"
-
-[codex]
-executable = "" # 비우면 PATH와 ~/.local/bin/codex를 검색
-model = ""      # 비우면 Codex CLI 기본 모델
-
-[server]
-port = "47291"
-
-[supabase]
-url = "https://your-project.supabase.co"
-anon_key = "your-anon-key"
-service_role_key = "your-service-role-key"
-jwt_secret = "" # Supabase가 HS256 토큰을 쓰는 경우에만 필요
-```
-
-`frontend/.env`에는 공개 가능한 anon 값만 둡니다.
-
 ```dotenv
 VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key
+VITE_SUPABASE_ANON_KEY=sb_publishable_your_public_key
 ```
 
-허용할 Google 계정을 `.env.local`에 지정합니다. 이메일은 대소문자를 구분하지 않으며 여러 개는 쉼표로 구분합니다. 기존 UUID allowlist도 함께 지원하며 둘 중 하나가 일치하면 통과합니다.
+`VITE_SUPABASE_ANON_KEY`에는 publishable 키 또는 기존 anon 키를 넣습니다. 빌드는 관리자 키를 거부하고, 두 공개 값만 `/clinic-config.json`에 기록합니다. Vercel에도 같은 두 환경변수를 등록합니다. DB의 RLS와 `authenticated` 역할 권한을 적용한 뒤 **새 frontend를 먼저 배포**해야 설정 없는 clinic 시작이 가능합니다. 이전 배포에는 공개 설정 파일이 없으므로 clinic이 원인을 표시하고 종료합니다.
 
-```dotenv
-ALLOWED_USER_EMAILS=first@example.com,second@example.com
-# 선택형 기존 방식
-ALLOWED_USER_IDS=first-user-uuid,second-user-uuid
-```
+개발은 `npm --prefix frontend ci` 후 `make dev`로 시작합니다. 개발용 clinic은 로컬 Vite의 공개 설정을 읽습니다. backend만 따로 실행하려면 먼저 `make dev-fe`, 다른 터미널에서 `make dev-be`를 실행합니다.
+
+## 선택형 로컬 설정
+
+기본 사이트 외 자체 배포를 사용하는 경우에는 `CLINIC_SITE_URL=https://your-site.example ./run.sh ~/learning`으로 사이트만 지정합니다. 해당 origin은 HTTP와 WebSocket에 함께 허용됩니다. HTTPS 사이트 또는 개발용 loopback HTTP만 지원하며, 다른 사이트로의 리다이렉트는 따르지 않습니다.
+
+Codex 모델·Gemini·포트 등의 고급 설정이 필요한 경우에만 `config.toml.example` 또는 `.env.example`을 복사합니다. 개발자는 `SUPABASE_URL`, `SUPABASE_ANON_KEY`를 모두 지정해 공개 설정 자동 조회를 생략할 수도 있습니다. 로컬의 명시적 공개 설정은 배포 사이트 설정보다 우선합니다.
+
+이 Mac의 접근 계정을 추가로 제한하려면 선택형 `.env.local`에 `ALLOWED_USER_EMAILS=first@example.com,second@example.com`을 설정합니다. 기본값은 배포된 Supabase 프로젝트에서 인증된 사용자입니다. 이메일과 기존 `ALLOWED_USER_IDS`는 둘 중 하나가 일치하면 통과합니다. 이는 로컬 접근 제한이며 서비스 전체의 가입 제한은 운영자가 Supabase Auth에서 관리합니다.
 
 ## Supabase 스키마
 
@@ -154,6 +148,9 @@ where d.id = r.id and r.duplicate_rank > 1;
 create unique index if not exists daily_missions_user_project_dir_uidx
   on daily_missions (user_id, project_dir);
 
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on user_settings, daily_missions to authenticated;
+
 alter table user_settings enable row level security;
 alter table daily_missions enable row level security;
 
@@ -163,7 +160,7 @@ create policy "daily missions are private" on daily_missions
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 ```
 
-Supabase Authentication에서 Google provider를 활성화하고 Google OAuth client ID/secret을 등록하세요. URL Configuration의 Site URL과 Redirect URLs에는 Vercel production URL을 등록합니다. clinic은 `ALLOWED_USER_EMAILS` 또는 기존 `ALLOWED_USER_IDS`로 최종 접근을 제한합니다. 단일 값용 `ALLOWED_USER_EMAIL`과 `ALLOWED_USER_ID`도 지원합니다.
+Supabase Authentication에서 Google provider를 활성화하고 Google OAuth client ID/secret을 등록하세요. URL Configuration의 Site URL과 Redirect URLs에는 Vercel production URL을 등록합니다. clinic은 선택형 `ALLOWED_USER_EMAILS` 또는 기존 `ALLOWED_USER_IDS`로 해당 Mac의 접근을 추가 제한합니다. 단일 값용 `ALLOWED_USER_EMAIL`과 `ALLOWED_USER_ID`도 지원합니다.
 
 ## 개발과 빌드
 
@@ -176,7 +173,7 @@ make build
 ./run.sh
 ```
 
-인자를 생략하면 학습 프로젝트는 Git에서 제외된 저장소의 `data/` 아래에 저장됩니다. 다른 위치를 사용하려면 `./run.sh ~/learning` 또는 `make dev DIR=~/learning`처럼 지정합니다. 개발 화면은 `http://localhost:5173`, clinic은 `http://127.0.0.1:47291`입니다. Vercel 기본 도메인(`https://<project>.vercel.app`)이나 다른 custom domain을 쓰면 해당 production origin을 `ALLOWED_ORIGINS=https://your-domain.example` 형태로 clinic 실행 환경에 추가합니다.
+인자를 생략하면 학습 프로젝트는 Git에서 제외된 저장소의 `data/` 아래에 저장됩니다. 다른 위치를 사용하려면 `./run.sh ~/learning` 또는 `make dev DIR=~/learning`처럼 지정합니다. 개발 화면은 `http://localhost:5173`, clinic은 `http://127.0.0.1:47291`입니다. 자체 배포 도메인은 `CLINIC_SITE_URL`로 지정하면 공개 설정 조회와 Origin 허용에 함께 적용됩니다.
 
 ## Vercel 배포
 
@@ -189,7 +186,7 @@ Vercel 프로젝트 설정은 다음과 같습니다.
 | Build Command | `npm run build` |
 | Output Directory | `dist` |
 
-`frontend/vercel.json`이 SPA rewrite와 정적 자산 캐시·보안 헤더를 설정합니다. Vercel에는 `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`만 등록합니다. 기본 clinic 주소는 `http://127.0.0.1:47291`이므로 Vercel에서 `VITE_LOCAL_URL`을 따로 설정하지 않습니다. CSP는 `127.0.0.1`과 `localhost`의 명시적 포트를 허용합니다. 포트를 변경할 때는 `config.toml`의 `[server].port`와 빌드 시 `VITE_LOCAL_URL`만 같은 loopback 주소·포트로 맞추면 되며, `frontend/vercel.json`은 수정하지 않습니다.
+빌드는 `/clinic-config.json`도 생성합니다. 이 파일은 SPA rewrite에서 제외하고 캐시하지 않습니다. `frontend/vercel.json`이 SPA rewrite와 정적 자산 캐시·보안 헤더를 설정합니다. Vercel에는 `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`만 등록합니다. 기본 clinic 주소는 `http://127.0.0.1:47291`이므로 Vercel에서 `VITE_LOCAL_URL`을 따로 설정하지 않습니다. CSP는 `127.0.0.1`과 `localhost`의 명시적 포트를 허용합니다. 포트를 변경할 때는 `config.toml`의 `[server].port`와 빌드 시 `VITE_LOCAL_URL`만 같은 loopback 주소·포트로 맞추면 되며, `frontend/vercel.json`은 수정하지 않습니다.
 
 ## 확인된 문제와 조치
 
@@ -217,10 +214,13 @@ Vercel 프로젝트 설정은 다음과 같습니다.
 ## 보안 동작
 
 - clinic은 `127.0.0.1`에만 바인딩합니다.
-- `/health` 외 REST 요청은 로그인 JWT가 필요합니다.
+- `/health` 외 REST 요청은 로그인 JWT가 필요합니다. ES256은 공개 JWKS, 기존 HS256은 Supabase Auth의 `/auth/v1/user`로 검증하며 비밀키를 설치하지 않습니다. HS256은 인증 요청마다 네트워크 검증이 추가됩니다.
+- DB 요청은 공개 키와 해당 요청의 사용자 JWT만 사용합니다. 사용자 JWT는 프로세스 전역에 저장하지 않습니다.
 - WebSocket JWT는 URL/query가 아닌 subprotocol로 전달합니다.
 - terminal/LSP 자식 프로세스에는 Gemini·Supabase·OpenAI 비밀 환경변수를 전달하지 않습니다.
 - Codex 실행은 임시 빈 작업공간, read-only sandbox, 도구 비활성화, 단일 동시 실행, JSON Schema를 사용합니다.
 - Vercel preview domain은 기본 허용하지 않습니다. production/custom domain을 명시적으로 등록하세요.
 
 Safari는 HTTPS 페이지에서 평문 loopback 연결을 제한할 수 있으므로 현재 배포 구조는 Chrome을 기준으로 합니다.
+
+공개 키·RLS 권한과 HS256 검증 방식은 [Supabase API 키 문서](https://supabase.com/docs/guides/api/api-keys), [JWT 검증 문서](https://supabase.com/docs/guides/auth/jwts)를 따릅니다.

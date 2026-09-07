@@ -1,8 +1,10 @@
 package ws
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +16,18 @@ func configureWSTest(t *testing.T) string {
 	t.Helper()
 	previous := *config.Global
 	config.Global.Supabase.URL = "https://project.supabase.co"
-	config.Global.Supabase.JWTSecret = "websocket-test-secret"
+	config.Global.Supabase.AnonKey = "sb_publishable_test"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := jwt.MapClaims{}
+		token, err := jwt.ParseWithClaims(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), claims, func(token *jwt.Token) (interface{}, error) { return []byte("websocket-test-secret"), nil }, jwt.WithValidMethods([]string{"HS256"}))
+		if err != nil || !token.Valid {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": claims["sub"]})
+	}))
+	t.Cleanup(server.Close)
+	config.Global.Supabase.URL = server.URL
 	t.Setenv("ALLOWED_USER_ID", "")
 	t.Setenv("ALLOWED_USER_IDS", "")
 	t.Setenv("ALLOWED_USER_EMAIL", "")
@@ -23,14 +36,14 @@ func configureWSTest(t *testing.T) string {
 	t.Cleanup(func() { *config.Global = previous })
 
 	claims := jwt.MapClaims{
-		"iss":  "https://project.supabase.co/auth/v1",
+		"iss":  config.Global.Supabase.URL + "/auth/v1",
 		"aud":  "authenticated",
 		"role": "authenticated",
 		"sub":  "user-123",
 		"exp":  time.Now().Add(time.Hour).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(config.Global.Supabase.JWTSecret))
+	signed, err := token.SignedString([]byte("websocket-test-secret"))
 	if err != nil {
 		t.Fatalf("sign token: %v", err)
 	}

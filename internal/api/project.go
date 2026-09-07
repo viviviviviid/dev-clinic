@@ -260,13 +260,13 @@ func CompleteProject(c *gin.Context) {
 	// PostgREST returns success even when an exact filter matches zero rows.
 	suffix := filepath.Base(filepath.Clean(req.ProjectDir))
 	suffixPath := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(suffix))
-	suffixErr := supabase.Patch(suffixPath, map[string]string{"status": "completed"})
+	suffixErr := supabase.Patch(c.Request.Context(), suffixPath, map[string]string{"status": "completed"})
 
 	// Also update legacy rows that stored an absolute path.
 	var legacyErr error
 	if req.ProjectDir != suffix {
 		legacyPath := fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(req.ProjectDir))
-		legacyErr = supabase.Patch(legacyPath, map[string]string{"status": "completed"})
+		legacyErr = supabase.Patch(c.Request.Context(), legacyPath, map[string]string{"status": "completed"})
 	}
 	if suffixErr != nil && (req.ProjectDir == suffix || legacyErr != nil) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": suffixErr.Error()})
@@ -289,10 +289,10 @@ func DeleteProject(c *gin.Context) {
 	}
 
 	// Remove from DB — match by exact path or by dir_suffix
-	_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(req.ProjectDir)))
+	_ = supabase.Delete(c.Request.Context(), fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(req.ProjectDir)))
 	if idx := strings.LastIndex(req.ProjectDir, "/"); idx >= 0 {
 		suffix := req.ProjectDir[idx+1:]
-		_ = supabase.Delete(fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(suffix)))
+		_ = supabase.Delete(c.Request.Context(), fmt.Sprintf("daily_missions?user_id=eq.%s&project_dir=eq.%s", supabase.FilterValue(userID), supabase.FilterValue(suffix)))
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})

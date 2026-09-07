@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/coding-tutor/internal/config"
+	"github.com/coding-tutor/internal/supabase"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 )
@@ -44,7 +45,7 @@ var (
 
 const maxJWKSResponseBytes = 1 << 20
 
-var jwksHTTPClient = &http.Client{Timeout: 5 * time.Second}
+var jwksHTTPClient = config.PublicHTTPClient(5 * time.Second)
 
 func fetchJWKS() ([]jwkKey, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(config.Global.Supabase.URL), "/")
@@ -75,7 +76,7 @@ func fetchJWKS() ([]jwkKey, error) {
 func getJWKS() ([]jwkKey, error) {
 	keysURL := strings.TrimRight(strings.TrimSpace(config.Global.Supabase.URL), "/")
 	keysMu.RLock()
-	if len(cachedKeys) > 0 && cachedKeysURL == keysURL && time.Since(cachedKeysAt) < time.Hour {
+	if len(cachedKeys) > 0 && cachedKeysURL == keysURL && time.Since(cachedKeysAt) < 10*time.Minute {
 		keys := append([]jwkKey(nil), cachedKeys...)
 		keysMu.RUnlock()
 		return keys, nil
@@ -94,25 +95,11 @@ func getJWKS() ([]jwkKey, error) {
 	return keys, nil
 }
 
-// JWTKeyFunc is exported for reuse in other packages (e.g. lsp proxy).
-func JWTKeyFunc(token *jwt.Token) (interface{}, error) {
-	return jwtKeyFunc(token)
-}
-
 func jwtKeyFunc(token *jwt.Token) (interface{}, error) {
 	alg, _ := token.Header["alg"].(string)
 	kid, _ := token.Header["kid"].(string)
 
 	switch alg {
-	case "HS256":
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected method for HS256")
-		}
-		if strings.TrimSpace(config.Global.Supabase.JWTSecret) == "" {
-			return nil, errors.New("supabase JWT secret is not configured")
-		}
-		return []byte(config.Global.Supabase.JWTSecret), nil
-
 	case "ES256":
 		if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
 			return nil, fmt.Errorf("unexpected method for ES256")
@@ -161,11 +148,26 @@ func ValidateToken(tokenString string) (string, error) {
 		jwt.WithValidMethods([]string{"HS256", "ES256"}),
 		jwt.WithJSONNumber(),
 	)
-	token, err := parser.ParseWithClaims(tokenString, claims, jwtKeyFunc)
-	if err != nil || token == nil || !token.Valid {
-		if err == nil {
-			err = errors.New("token is invalid")
+	// Unverified parsing only selects the verifier. No claim grants access until
+	// ES256 signature verification or the trusted Auth server has succeeded.
+	token, _, err := parser.ParseUnverified(tokenString, claims)
+	if err != nil || token == nil {
+		return "", errors.New("token is invalid")
+	}
+	switch token.Method.Alg() {
+	case "ES256":
+		token, err = parser.ParseWithClaims(tokenString, claims, jwtKeyFunc)
+		if err != nil || token == nil || !token.Valid {
+			return "", errors.New("token signature is invalid")
 		}
+	case "HS256":
+		if err := verifyWithAuthServer(tokenString, claims); err != nil {
+			return "", err
+		}
+	default:
+		return "", errors.New("unsupported token algorithm")
+	}
+	if err := claims.Valid(); err != nil {
 		return "", err
 	}
 
@@ -193,6 +195,37 @@ func ValidateToken(tokenString string) (string, error) {
 	}
 
 	return userID, nil
+}
+
+// Legacy HS256 projects are verified by Supabase, so no shared signing secret
+// needs to be installed on a learner's computer.
+func verifyWithAuthServer(token string, claims jwt.MapClaims) error {
+	key := strings.TrimSpace(config.Global.Supabase.AnonKey)
+	if err := config.ValidatePublicKey(key); err != nil {
+		return err
+	}
+	endpoint := strings.TrimRight(config.Global.Supabase.URL, "/") + "/auth/v1/user"
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return errors.New("invalid auth endpoint")
+	}
+	req.Header.Set("apikey", key)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := jwksHTTPClient.Do(req)
+	if err != nil {
+		return errors.New("Supabase Auth verification unavailable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("Supabase Auth rejected token")
+	}
+	var user struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJWKSResponseBytes)).Decode(&user); err != nil || user.ID == "" || user.ID != claims["sub"] {
+		return errors.New("Supabase Auth returned invalid identity")
+	}
+	return nil
 }
 
 func isAllowedUser(userID, email string) bool {
@@ -245,6 +278,7 @@ func Auth() gin.HandlerFunc {
 		}
 
 		c.Set("user_id", userID)
+		c.Request = c.Request.WithContext(supabase.WithAccessToken(c.Request.Context(), tokenStr))
 		c.Next()
 	}
 }

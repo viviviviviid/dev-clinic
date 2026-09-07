@@ -2,6 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "headers": [
     {
+      "source": "/clinic-config.json",
+      "headers": [{ "key": "Cache-Control", "value": "no-store" }]
+    },
+    {
       "source": "/assets/(.*)",
       "headers": [
         {
@@ -42,7 +46,7 @@
       "destination": "/privacy.html"
     },
     {
-      "source": "/:path((?!assets/).*)",
+      "source": "/:path((?!assets/|clinic-config\\.json$).*)",
       "destination": "/index.html"
     }
   ]

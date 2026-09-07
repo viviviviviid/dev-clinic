@@ -57,7 +57,7 @@ func TestValidateRuntimeConfig(t *testing.T) {
 
 	config.Global.Server.Port = "47291"
 	config.Global.Supabase.URL = "https://example.supabase.co"
-	config.Global.Supabase.ServiceRoleKey = "secret"
+	config.Global.Supabase.AnonKey = "sb_publishable_test"
 	if err := validateRuntimeConfig(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
@@ -72,9 +72,9 @@ func TestValidateRuntimeConfig(t *testing.T) {
 		t.Fatal("missing Supabase URL accepted")
 	}
 	config.Global.Supabase.URL = "https://example.supabase.co"
-	config.Global.Supabase.ServiceRoleKey = ""
+	config.Global.Supabase.AnonKey = ""
 	if err := validateRuntimeConfig(); err == nil {
-		t.Fatal("missing service role key accepted")
+		t.Fatal("missing public key accepted")
 	}
 }
 

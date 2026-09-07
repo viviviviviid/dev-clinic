@@ -87,7 +87,7 @@ export default function SettingsScreen({ onComplete, initial }: Props) {
 
             <section className="settings-section" aria-labelledby="storage-directory-title">
               <h4 className="settings-label" id="storage-directory-title">학습 파일 저장 디렉토리</h4>
-              <p className="settings-hint">clinic 실행 시 CLI 인자로 지정합니다. 예: <code>./bin/clinic ~/learning</code></p>
+              <p className="settings-hint">clinic 실행 시 CLI 인자로 지정합니다. 예: <code>./run.sh ~/learning</code></p>
               {initial?.base_dir ? (
                 <p className="settings-current-path">현재 경로 <code>{initial.base_dir}</code></p>
               ) : (

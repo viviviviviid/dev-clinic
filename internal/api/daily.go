@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -42,7 +43,7 @@ func GetDaily(c *gin.Context) {
 	today := time.Now().Format("2006-01-02")
 
 	var missions []DailyMission
-	err := getDailyRecords(
+	err := getDailyRecords(c.Request.Context(),
 		fmt.Sprintf("daily_missions?user_id=eq.%s&date=eq.%s&order=created_at.asc&select=*", supabase.FilterValue(userID), supabase.FilterValue(today)),
 		&missions,
 	)
@@ -75,7 +76,7 @@ func GetDailyHistory(c *gin.Context) {
 	}
 
 	var missions []DailyMission
-	if err := supabase.Get(query, &missions); err != nil {
+	if err := supabase.Get(c.Request.Context(), query, &missions); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -170,7 +171,7 @@ func ConfirmDailyStream(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "프로젝트 생성 경로를 확인하지 못했습니다"})
 		return
 	}
-	existingMissions, err := getDailyMissionsByProjectDir(userID, dirSuffix)
+	existingMissions, err := getDailyMissionsByProjectDir(c.Request.Context(), userID, dirSuffix)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "기존 학습 기록을 확인하지 못해 AI 생성을 시작하지 않았습니다"})
 		return
@@ -205,7 +206,7 @@ func ConfirmDailyStream(c *gin.Context) {
 	sendProgress("setup", "사용자 설정 불러오는 중...")
 
 	var settings []UserSettings
-	if err := supabase.Get(
+	if err := supabase.Get(c.Request.Context(),
 		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", supabase.FilterValue(userID)),
 		&settings,
 	); err != nil || len(settings) == 0 {
@@ -317,14 +318,14 @@ func validateFinalizeDailyRequestAt(req *FinalizeDailyReq, now time.Time) (strin
 	return missionDate.Format("2006-01-02"), nil
 }
 
-func getDailyMissionsByProjectDir(userID, dirSuffix string) ([]DailyMission, error) {
+func getDailyMissionsByProjectDir(ctx context.Context, userID, dirSuffix string) ([]DailyMission, error) {
 	var missions []DailyMission
 	path := fmt.Sprintf(
 		"daily_missions?user_id=eq.%s&project_dir=eq.%s&select=*",
 		supabase.FilterValue(userID),
 		supabase.FilterValue(dirSuffix),
 	)
-	if err := supabase.Get(path, &missions); err != nil {
+	if err := supabase.Get(ctx, path, &missions); err != nil {
 		return nil, err
 	}
 	return missions, nil
@@ -409,7 +410,7 @@ func FinalizeDailyMission(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "로컬 프로젝트 설정이 완료되지 않았습니다"})
 		return
 	}
-	existing, err := getDailyMissionsByProjectDir(userID, req.DirSuffix)
+	existing, err := getDailyMissionsByProjectDir(c.Request.Context(), userID, req.DirSuffix)
 	if err != nil {
 		log.Printf("daily finalize: lookup failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "학습 기록을 확인하지 못했습니다"})
@@ -430,14 +431,14 @@ func FinalizeDailyMission(c *gin.Context) {
 		ProjectDir: req.DirSuffix,
 		Status:     "active",
 	}
-	if err := supabase.Insert("daily_missions", mission); err == nil {
+	if err := supabase.Insert(c.Request.Context(), "daily_missions", mission); err == nil {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "created": true})
 		return
 	} else {
 		// A concurrent identical finalize can win the unique-index race or the
 		// response can be lost after commit. Re-read once before reporting failure.
 		log.Printf("daily finalize: insert failed, checking retry state: %v", err)
-		existing, lookupErr := getDailyMissionsByProjectDir(userID, req.DirSuffix)
+		existing, lookupErr := getDailyMissionsByProjectDir(c.Request.Context(), userID, req.DirSuffix)
 		if lookupErr == nil {
 			if idempotent, conflict := finalizedMissionState(existing, req, missionDate); idempotent {
 				c.JSON(http.StatusOK, gin.H{"ok": true, "created": false})
@@ -518,7 +519,7 @@ func NurseChatHandler(c *gin.Context) {
 	}
 
 	var settings []UserSettings
-	if err := supabase.Get(
+	if err := supabase.Get(c.Request.Context(),
 		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", supabase.FilterValue(userID)),
 		&settings,
 	); err != nil || len(settings) == 0 {
@@ -529,7 +530,7 @@ func NurseChatHandler(c *gin.Context) {
 	// If caller didn't supply past topics, fetch from DB
 	if len(req.PastTopics) == 0 {
 		var allHistory []DailyMission
-		if err := supabase.Get(fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&limit=100&select=topic", supabase.FilterValue(userID)), &allHistory); err != nil {
+		if err := supabase.Get(c.Request.Context(), fmt.Sprintf("daily_missions?user_id=eq.%s&order=created_at.desc&limit=100&select=topic", supabase.FilterValue(userID)), &allHistory); err != nil {
 			log.Printf("daily: nurse-chat history fetch error: %v", err)
 		}
 		seen := map[string]bool{}

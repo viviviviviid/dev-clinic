@@ -33,7 +33,7 @@ func GetUserSettings(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	var settings []UserSettings
-	err := supabase.Get(
+	err := supabase.Get(c.Request.Context(),
 		fmt.Sprintf("user_settings?user_id=eq.%s&select=*", supabase.FilterValue(userID)),
 		&settings,
 	)
@@ -95,7 +95,7 @@ func PutUserSettings(c *gin.Context) {
 		UpdatedAt:  time.Now().UTC(),
 	}
 
-	if err := supabase.Upsert("user_settings", settings); err != nil {
+	if err := supabase.Upsert(c.Request.Context(), "user_settings", settings); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

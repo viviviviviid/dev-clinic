@@ -9,10 +9,8 @@ import (
 )
 
 type SupabaseConfig struct {
-	URL            string `toml:"url"`
-	AnonKey        string `toml:"anon_key"`
-	ServiceRoleKey string `toml:"service_role_key"`
-	JWTSecret      string `toml:"jwt_secret"`
+	URL     string `toml:"url"`
+	AnonKey string `toml:"anon_key"`
 }
 
 type Config struct {
@@ -21,6 +19,7 @@ type Config struct {
 	Gemini     GeminiConfig   `toml:"gemini"`
 	Server     ServerConfig   `toml:"server"`
 	Supabase   SupabaseConfig `toml:"supabase"`
+	SiteURL    string         `toml:"site_url"`
 	BaseDir    string
 }
 
@@ -42,6 +41,7 @@ type ServerConfig struct {
 }
 
 var Global = &Config{
+	SiteURL:    "https://tutor.abcfe.net",
 	AIProvider: "codex",
 	Codex: CodexConfig{
 		Executable: "codex",
@@ -94,11 +94,8 @@ func applyEnv() {
 	if v := os.Getenv("SUPABASE_ANON_KEY"); v != "" {
 		Global.Supabase.AnonKey = v
 	}
-	if v := os.Getenv("SUPABASE_SERVICE_ROLE_KEY"); v != "" {
-		Global.Supabase.ServiceRoleKey = v
-	}
-	if v := os.Getenv("SUPABASE_JWT_SECRET"); v != "" {
-		Global.Supabase.JWTSecret = v
+	if v := strings.TrimSpace(os.Getenv("CLINIC_SITE_URL")); v != "" {
+		Global.SiteURL = v
 	}
 	if v := os.Getenv("BASE_DIR"); v != "" {
 		Global.BaseDir = v

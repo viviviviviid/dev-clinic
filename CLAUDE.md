@@ -5,11 +5,10 @@
 ## 실행
 
 ```bash
-cp config.toml.example config.toml
-cp frontend/.env.example frontend/.env
+cp frontend/.env.example frontend/.env # 배포자/개발자만
 codex login                         # 기본 AI provider
 make dev                            # 기본 BaseDir: ./data
-./run.sh                            # 배포된 frontend 사용 시 backend만 실행
+./run.sh ~/learning                 # 일반 사용자: 설정 파일 없이 실행
 make test
 make build
 ```
@@ -20,8 +19,11 @@ make build
 
 ## 경계
 
+- clinic은 기본 배포 사이트의 `/clinic-config.json`에서 공개 Supabase 설정을 읽는다. Vite가 공개 URL·키만 생성하며, 자체 배포는 `CLINIC_SITE_URL`로 지정한다.
+- service_role/secret 키와 JWT 서명 비밀키는 로컬 설정에서 읽지 않는다. DB 요청은 검증된 사용자 JWT를 request context로 전달하며 RLS를 따른다.
 - `/health`만 무인증이다. `/api/*`는 Supabase JWT를 검증한다.
-- 로그인 UI는 Google OAuth만 제공하고 clinic은 `ALLOWED_USER_EMAILS`/`ALLOWED_USER_IDS`로 최종 접근을 제한한다.
+- ES256은 공개 JWKS, HS256은 Supabase Auth `/auth/v1/user`에서 검증한다.
+- 로그인 UI는 Google OAuth만 제공하고 clinic은 선택형 `ALLOWED_USER_EMAILS`/`ALLOWED_USER_IDS`로 해당 Mac의 접근을 추가 제한한다.
 - WS, terminal, LSP는 `['coding-tutor', jwt]` subprotocol을 Upgrade 전에 검증한다. JWT를 query에 넣지 않는다.
 - clinic은 loopback Host와 명시된 production/custom Origin만 허용한다.
 - 모든 디스크 경로는 `config.Global.BaseDir` 내부여야 한다. `internal/pathguard`와 `os.Root` 방어를 우회하지 않는다.

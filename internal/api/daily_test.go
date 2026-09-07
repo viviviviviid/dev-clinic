@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/coding-tutor/internal/ai"
 	"github.com/coding-tutor/internal/config"
+	"github.com/coding-tutor/internal/supabase"
 	"github.com/gin-gonic/gin"
 )
 
@@ -94,7 +96,7 @@ func TestGetDailyLoadsLobbyWithoutGeneratingTopics(t *testing.T) {
 	defer func() { getDailyRecords = oldGet }()
 
 	calls := 0
-	getDailyRecords = func(path string, result interface{}) error {
+	getDailyRecords = func(_ context.Context, path string, result interface{}) error {
 		calls++
 		missions, ok := result.(*[]DailyMission)
 		if !ok {
@@ -365,7 +367,7 @@ func TestConfirmDailyStreamRejectsExistingMissionBeforeAIGeneration(t *testing.T
 	http.DefaultTransport = dailyRoundTripFunc(store.RoundTrip)
 	config.Global.BaseDir = t.TempDir()
 	config.Global.Supabase.URL = "https://test.supabase.invalid"
-	config.Global.Supabase.ServiceRoleKey = "test-service-role"
+	config.Global.Supabase.AnonKey = "sb_publishable_test"
 
 	body, err := json.Marshal(ConfirmDailyReq{Topic: "Go", Slug: "GoBasics"})
 	if err != nil {
@@ -376,6 +378,7 @@ func TestConfirmDailyStreamRejectsExistingMissionBeforeAIGeneration(t *testing.T
 	c.Set("user_id", "user-1")
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/daily/confirm-stream", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request = c.Request.WithContext(supabase.WithAccessToken(c.Request.Context(), "user-token"))
 
 	ConfirmDailyStream(c)
 
@@ -398,6 +401,7 @@ func finalizeRequest(t *testing.T, userID string, request FinalizeDailyReq) *htt
 	c.Set("user_id", userID)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/daily/finalize", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request = c.Request.WithContext(supabase.WithAccessToken(c.Request.Context(), "user-token"))
 	FinalizeDailyMission(c)
 	return response
 }
@@ -414,7 +418,7 @@ func TestFinalizeDailyMissionCreatesOnlyOnFinalizeAndIsIdempotent(t *testing.T) 
 
 	config.Global.BaseDir = t.TempDir()
 	config.Global.Supabase.URL = "https://test.supabase.invalid"
-	config.Global.Supabase.ServiceRoleKey = "test-service-role"
+	config.Global.Supabase.AnonKey = "sb_publishable_test"
 
 	if rows := store.snapshot(); len(rows) != 0 {
 		t.Fatalf("mission existed before finalize: %#v", rows)

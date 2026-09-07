@@ -53,10 +53,24 @@ function normalizeSupabaseUrl(value: unknown): string {
 }
 
 export function resolveSupabaseConfig(environment: BootEnvironment): SupabaseConfig {
+  const key = requiredString('VITE_SUPABASE_ANON_KEY', environment.VITE_SUPABASE_ANON_KEY)
+  let isPublic = key.startsWith('sb_publishable_') && key.length > 'sb_publishable_'.length
+  const parts = key.split('.')
+  if (parts.length === 3) {
+    try {
+      isPublic = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))).role === 'anon'
+    } catch { /* Reject malformed keys without printing their contents. */ }
+  }
+  if (!isPublic) throw new Error('VITE_SUPABASE_ANON_KEY에는 공개 publishable/anon 키만 사용할 수 있습니다.')
   return {
     supabaseUrl: normalizeSupabaseUrl(environment.VITE_SUPABASE_URL),
-    supabaseAnonKey: requiredString('VITE_SUPABASE_ANON_KEY', environment.VITE_SUPABASE_ANON_KEY),
+    supabaseAnonKey: key,
   }
+}
+
+// This exact whitelist is served to clinic; never serialize the environment.
+export function publicClinicConfig(environment: BootEnvironment) {
+  return { version: 1, ...resolveSupabaseConfig(environment) }
 }
 
 export function resolveBootConfig(environment: BootEnvironment): BootConfig {

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -28,6 +29,9 @@ const maxRequestBody = 8 << 20 // 8 MiB
 
 func main() {
 	config.Load("config.toml")
+	if err := config.LoadPublic(context.Background()); err != nil {
+		log.Fatal(err)
+	}
 	configureBaseDir()
 	if err := validateRuntimeConfig(); err != nil {
 		log.Fatal(err)
@@ -120,7 +124,7 @@ func configureBaseDir() {
 	if dir == "" {
 		dir = "."
 	}
-	if config.Global.BaseDir == "" && len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		dir = os.Args[1]
 	}
 	if dir == "~" {
@@ -147,20 +151,16 @@ func validateRuntimeConfig() error {
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("invalid clinic port %q", config.Global.Server.Port)
 	}
-	supabaseURL, err := url.Parse(strings.TrimSpace(config.Global.Supabase.URL))
-	if err != nil || supabaseURL.Host == "" || supabaseURL.Scheme != "https" && supabaseURL.Scheme != "http" {
-		return fmt.Errorf("SUPABASE_URL (or [supabase].url) must be configured")
-	}
-	if strings.TrimSpace(config.Global.Supabase.ServiceRoleKey) == "" {
-		return fmt.Errorf("SUPABASE_SERVICE_ROLE_KEY (or [supabase].service_role_key) must be configured")
-	}
-	return nil
+	return config.ValidateSupabase()
 }
 
 func localAccessMiddleware() gin.HandlerFunc {
 	allowed := map[string]struct{}{
 		"https://tutor.abcfe.net":  {},
 		"https://clinic.abcfe.net": {},
+	}
+	if config.Global.SiteURL != "" {
+		allowed[config.Global.SiteURL] = struct{}{}
 	}
 	for _, origin := range strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",") {
 		if origin = strings.TrimSpace(origin); origin != "" {
