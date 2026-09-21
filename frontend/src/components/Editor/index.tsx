@@ -17,6 +17,7 @@ import {
 } from '../../hooks/useProject'
 import type { ReviewRequest } from '../../hooks/useProject'
 import { lspClient } from '../../lib/lspClient'
+import { toLspCompletionContext, toMonacoCompletions } from '../../lib/lspCompletion'
 import type { Location as LspLocation, LspDiagnostic } from '../../lib/lspClient'
 import type { DiagnosticItem } from '../../store'
 import QuizOverlay from './QuizOverlay'
@@ -33,6 +34,9 @@ import {
 import { createTestRunRequest } from './testRun'
 import { shouldCancelReviewOnEdit } from './reviewEditCancellation'
 import { isReviewableSourcePath } from './reviewableSource'
+import { isProjectFile, loadProjectLocations } from './navigation'
+import OutputPanel from './OutputPanel'
+import { createChatCodeReference } from '../../lib/chatCodeContext'
 
 type MonacoEnvironmentGlobal = typeof globalThis & {
   MonacoEnvironment?: {
@@ -97,12 +101,6 @@ const DECORATION_BASE = {
     glyphMarginClassName: 'tutor-hole-glyph',
     inlineClassName: 'tutor-hole-text-blurred',
   } as editor.IModelDecorationOptions,
-  holeLocked: {
-    isWholeLine: true,
-    className: 'tutor-hole-line-locked',
-    glyphMarginClassName: 'tutor-hole-glyph-locked',
-    inlineClassName: 'tutor-hole-text-blurred',
-  } as editor.IModelDecorationOptions,
   bug: {
     isWholeLine: true,
     className: 'tutor-bug-line',
@@ -124,7 +122,6 @@ function applyDecorations(
   const decorations: editor.IModelDeltaDecoration[] = []
   const lines = content.split('\n')
   let holeIndex = 0
-  let firstUnsolvedHoleFound = false
 
   lines.forEach((line, idx) => {
     const lineNumber = idx + 1
@@ -134,16 +131,7 @@ function applyDecorations(
       const isSolved = solvedHoles.has(newKey) || solvedHoles.has(legacyKey)
 
       let opts = DECORATION_BASE.hole
-      if (skillLevel === 'newbie' && !isSolved) {
-        if (!firstUnsolvedHoleFound) {
-          // 첫 번째 미해결 HOLE: 활성 (노란 블러)
-          firstUnsolvedHoleFound = true
-          opts = DECORATION_BASE.holeBlurred
-        } else {
-          // 이후 미해결 HOLE: 잠금 (회색 블러)
-          opts = DECORATION_BASE.holeLocked
-        }
-      }
+      if (skillLevel === 'newbie' && !isSolved) opts = DECORATION_BASE.holeBlurred
 
       decorations.push({
         range: { startLineNumber: lineNumber, startColumn: 1, endLineNumber: lineNumber, endColumn: line.length + 1 },
@@ -163,40 +151,29 @@ function applyDecorations(
   collectionRef.current = editorInstance.createDecorationsCollection(decorations)
 }
 
-// LSP Location → Monaco Location 변환 + 모델 사전 생성 (순수 함수, 이동 없음)
-// provideDefinition에서만 사용 — Monaco가 link decoration/peek을 위해 호출할 때 side effect 없어야 함
-async function resolveDefinition(
+// Providers may run during modifier hover; previews never navigate or load external files.
+async function resolveLocations(
   lspResult: LspLocation | LspLocation[],
   monaco: typeof import('monaco-editor'),
-): Promise<import('monaco-editor').languages.Definition | null> {
-  const locations = Array.isArray(lspResult) ? lspResult : [lspResult]
-  if (!locations.length) return null
-
-  const results: import('monaco-editor').languages.Location[] = []
-
-  for (const loc of locations) {
+  projectDir: string,
+): Promise<import('monaco-editor').languages.Location[]> {
+  return loadProjectLocations(lspResult, projectDir, value => {
+    const uri = monaco.Uri.parse(value)
+    return uri.scheme === 'file' && !uri.authority ? uri.fsPath : null
+  }, async (loc, absPath) => {
     const uri = monaco.Uri.parse(loc.uri)
-    const { start, end } = loc.range
-    const range = {
-      startLineNumber: start.line + 1,
-      startColumn: start.character + 1,
-      endLineNumber: end.line + 1,
-      endColumn: end.character + 1,
-    }
-
-    // 모델이 없으면 미리 생성 (Monaco가 peek/link decoration에서 내용을 표시할 수 있도록)
     if (!monaco.editor.getModel(uri)) {
-      try {
-        const absPath = uri.fsPath || uri.path
-        const content = await readFileViaApi(absPath)
-        monaco.editor.createModel(content, detectLanguage(absPath), uri)
-      } catch { continue }
+      const content = await readFileViaApi(absPath)
+      // Definition previews and reference requests can load the same file concurrently.
+      if (!monaco.editor.getModel(uri)) monaco.editor.createModel(content, detectLanguage(absPath), uri)
     }
-
-    results.push({ uri, range })
-  }
-
-  return results.length === 1 ? results[0] : results.length > 1 ? results : null
+    return { uri, range: {
+      startLineNumber: loc.range.start.line + 1,
+      startColumn: loc.range.start.character + 1,
+      endLineNumber: loc.range.end.line + 1,
+      endColumn: loc.range.end.character + 1,
+    } }
+  })
 }
 
 // ANSI 색상 코드를 HTML span으로 변환 (최소한: 빨강/초록/리셋)
@@ -324,7 +301,9 @@ export default function Editor() {
     projectSessionEpoch,
     failFeedback,
   } = useStore()
-  const filename = openFile ? openFile.split('/').pop() || openFile : ''
+  const filename = openFile && projectStatus?.dir && isProjectFile(openFile, projectStatus.dir)
+    ? openFile.slice(projectStatus.dir.replace(/\/+$/, '').length + 1)
+    : openFile?.split('/').pop() ?? ''
   const { writeFile, getReviewStatus, requestReview, cancelReview } = useProject()
   const writeFileRef = useRef(writeFile)
   useEffect(() => { writeFileRef.current = writeFile }, [writeFile])
@@ -524,12 +503,13 @@ export default function Editor() {
       monacoInstance.languages.registerDefinitionProvider(lang, {
         async provideDefinition(model, position) {
           // 프로젝트 외부 파일(stdlib, 패키지 캐시 등)에서는 정의 이동 비활성화 (연쇄 이동 방지)
-          const currentPath = openFileRef.current || model.uri.fsPath || model.uri.path
+          const currentPath = model.uri.fsPath
           const dir = projectStatus?.dir ?? ''
-          if (dir && !currentPath.startsWith(dir)) return null
+          if (!isProjectFile(currentPath, dir)) return null
 
           if (lspClient.isReady) {
             const filePath = currentPath
+            await lspClient.notifyOpen(filePath, model.getValue(), model.getLanguageId())
             const lspResult = await lspClient.definition(
               filePath,
               position.lineNumber - 1,
@@ -537,7 +517,7 @@ export default function Editor() {
             ).catch(() => null)
 
             if (lspResult) {
-              return resolveDefinition(lspResult, monacoInstance)
+              return resolveLocations(lspResult, monacoInstance, dir)
             }
           }
 
@@ -550,7 +530,10 @@ export default function Editor() {
       monacoInstance.languages.registerReferenceProvider(lang, {
         async provideReferences(model, position, context) {
           if (!lspClient.isReady) return []
-          const filePath = openFileRef.current || model.uri.fsPath || model.uri.path
+          const filePath = model.uri.fsPath
+          const dir = projectStatus?.dir ?? ''
+          if (!isProjectFile(filePath, dir)) return []
+          await lspClient.notifyOpen(filePath, model.getValue(), model.getLanguageId())
           const lspResult = await lspClient.references(
             filePath,
             position.lineNumber - 1,
@@ -559,28 +542,7 @@ export default function Editor() {
           ).catch(() => null)
           if (!lspResult || !lspResult.length) return []
 
-          // 각 참조 파일의 모델을 미리 생성 (Monaco peek 패널이 내용을 표시할 수 있도록)
-          const results: import('monaco-editor').languages.Location[] = []
-          for (const loc of lspResult) {
-            const uri = monacoInstance.Uri.parse(loc.uri)
-            if (!monacoInstance.editor.getModel(uri)) {
-              try {
-                const absPath = uri.fsPath || uri.path
-                const content = await readFileViaApi(absPath)
-                monacoInstance.editor.createModel(content, detectLanguage(absPath), uri)
-              } catch { continue }
-            }
-            results.push({
-              uri,
-              range: {
-                startLineNumber: loc.range.start.line + 1,
-                startColumn: loc.range.start.character + 1,
-                endLineNumber: loc.range.end.line + 1,
-                endColumn: loc.range.end.character + 1,
-              },
-            })
-          }
-          return results
+          return resolveLocations(lspResult, monacoInstance, dir)
         },
       }),
 
@@ -774,61 +736,34 @@ export default function Editor() {
       // Completion provider
       monacoInstance.languages.registerCompletionItemProvider(lang, {
         triggerCharacters: TRIGGER_CHARS[lang] ?? ['.'],
-        async provideCompletionItems(model, position, context) {
+        async provideCompletionItems(model, position, context, token) {
           if (!lspClient.isReady) return null
-          const filePath = openFileRef.current || model.uri.fsPath || model.uri.path
+          const filePath = model.uri.fsPath || model.uri.path
+          const word = model.getWordUntilPosition(position)
+          const range = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: word.startColumn,
+            endColumn: position.column,
+          }
           // Ensure gopls has the exact current content before requesting completions.
           // Use model.getValue() rather than openFileContentRef.current because React
           // state updates are async: the ref may still hold stale content (without the
           // just-typed trigger character), which would revert gopls to an old version
           // and cause it to return empty completions.
-          if (filePath && openFileRef.current) {
-            await lspClient.notifyOpen(filePath, model.getValue(), lang)
+          if (filePath) {
+            await lspClient.notifyOpen(filePath, model.getValue(), model.getLanguageId())
           }
+          if (token.isCancellationRequested || model.isDisposed()) return null
           const raw = await lspClient.completion(
             filePath,
             position.lineNumber - 1,
             position.column - 1,
-            context.triggerCharacter,
+            toLspCompletionContext(context),
           ).catch(() => null)
 
-          if (!raw) return null
-          const items = Array.isArray(raw) ? raw : (raw.items ?? [])
-          const word = model.getWordUntilPosition(position)
-          // When triggered by a character (e.g. '.'), start the replace range
-          // from the current cursor position so Monaco's filter text is empty
-          // and all server-returned items are shown. Otherwise use the word
-          // start so typed characters narrow the list correctly.
-          const startColumn = context.triggerCharacter ? position.column : word.startColumn
-          const range = {
-            startLineNumber: position.lineNumber,
-            endLineNumber: position.lineNumber,
-            startColumn,
-            endColumn: position.column,
-          }
-
-          return {
-            suggestions: items.map((item) => {
-              const label = typeof item.label === 'string' ? item.label : item.label.label
-              const insertText = item.insertText ?? label
-              const doc = typeof item.documentation === 'string'
-                ? item.documentation
-                : item.documentation?.value ?? ''
-              return {
-                label,
-                kind: lspKindToMonaco(item.kind ?? 1),
-                detail: item.detail ?? '',
-                documentation: doc,
-                insertText,
-                insertTextRules: item.insertTextFormat === 2
-                  ? monacoInstance.languages.CompletionItemInsertTextRule.InsertAsSnippet
-                  : undefined,
-                filterText: item.filterText ?? label,
-                sortText: item.sortText ?? label,
-                range,
-              }
-            }),
-          }
+          if (!raw || token.isCancellationRequested || model.isDisposed()) return null
+          return toMonacoCompletions(raw, range, lspKindToMonaco)
         },
       }),
     ])
@@ -935,6 +870,13 @@ export default function Editor() {
     }
   }, [filename, monacoInstance, openFile, openFileContent, skillLevel, solvedHoles])
 
+  // Tabs opened through navigation/quick-open, and files opened before LSP is ready,
+  // must also enter the server's document set so edits participate in references.
+  useEffect(() => {
+    if (!openFile || !lspReady) return
+    void lspClient.notifyOpen(openFile, openFileContentRef.current, detectLanguage(openFile))
+  }, [openFile, lspReady])
+
   // readOnly 변경 시 에디터 옵션 업데이트
   useEffect(() => {
     editorRef.current?.updateOptions({ readOnly: openFileReadOnly || workspaceMutationLocked })
@@ -971,48 +913,37 @@ export default function Editor() {
     })
   }, [openFile, monacoInstance, projectStatus?.dir])
 
-  // navigateCrossFileRef: fresh 값 유지 (addTab, setOpenFileReadOnly, projectStatus?.dir)
+  // One navigation path for Cmd+click, F12 and selections from the references peek.
   useEffect(() => {
     navigateCrossFileRef.current = async (absPath: string, line: number, col: number) => {
-      if (!monacoInstance) return
-      const uri = monacoInstance.Uri.parse(`file://${absPath}`)
-      let content = monacoInstance.editor.getModel(uri)?.getValue() ?? ''
-      if (!content) {
+      if (!monacoInstance || !isProjectFile(absPath, projectStatus?.dir ?? '')) return
+      const uri = monacoInstance.Uri.file(absPath)
+      let model = monacoInstance.editor.getModel(uri)
+      if (!model) {
         try {
-          content = await readFileViaApi(absPath)
-          monacoInstance.editor.createModel(content, detectLanguage(absPath), uri)
+          const content = await readFileViaApi(absPath)
+          model = monacoInstance.editor.getModel(uri) ?? monacoInstance.editor.createModel(content, detectLanguage(absPath), uri)
         } catch { return }
       }
-      const isOutsideProject = projectStatus?.dir && !absPath.startsWith(projectStatus.dir)
-      addTab(absPath, content)
-      setOpenFileReadOnly(!!isOutsideProject)
       pendingNavigateRef.current = { path: absPath, line, column: col }
+      addTab(absPath, model.getValue())
+      setOpenFileReadOnly(false)
     }
   }, [monacoInstance, addTab, setOpenFileReadOnly, projectStatus?.dir])
 
-  // Cmd+click → cross-file 이동 (provideDefinition은 hover/link decoration도 호출하므로 여기서만 이동)
   useEffect(() => {
-    const ed = editorRef.current
-    if (!ed || !monacoInstance) return
-    const disposable = ed.onMouseDown(async (e) => {
-      if (!(e.event.metaKey || e.event.ctrlKey)) return
-      if (e.target.type !== monacoInstance.editor.MouseTargetType.CONTENT_TEXT) return
-      const pos = e.target.position
-      if (!pos || !lspClient.isReady) return
-      const filePath = openFileRef.current
-      if (!filePath) return
-      const result = await lspClient.definition(filePath, pos.lineNumber - 1, pos.column - 1).catch(() => null)
-      if (!result) return
-      const locs = Array.isArray(result) ? result : [result]
-      if (!locs.length) return
-      const loc = locs[0]
-      const uri = monacoInstance.Uri.parse(loc.uri)
-      const absPath = uri.fsPath || uri.path
-      if (absPath === filePath) return // same-file: Monaco가 provideDefinition 결과로 처리
-      await navigateCrossFileRef.current(absPath, loc.range.start.line + 1, loc.range.start.character + 1)
+    if (!monacoInstance) return
+    const opener = monacoInstance.editor.registerEditorOpener({
+      async openCodeEditor(_source, resource, selection) {
+        if (resource.scheme !== 'file' || resource.authority || !isProjectFile(resource.fsPath, projectStatus?.dir ?? '')) return false
+        const line = selection && ('startLineNumber' in selection ? selection.startLineNumber : selection.lineNumber)
+        const column = selection && ('startColumn' in selection ? selection.startColumn : selection.column)
+        await navigateCrossFileRef.current(resource.fsPath, line || 1, column || 1)
+        return true
+      },
     })
-    return () => disposable.dispose()
-  }, [monacoInstance])
+    return () => opener.dispose()
+  }, [monacoInstance, projectStatus?.dir])
 
   // Concept panel
   const [showConcept, setShowConcept] = useState(false)
@@ -1130,27 +1061,28 @@ export default function Editor() {
       handleReviewRef.current()
     })
 
-    // F12 → go to definition (cross-file 이동 처리)
-    ed.addCommand(monaco.KeyCode.F12, async () => {
-      const pos = ed.getPosition()
-      if (!pos || !lspClient.isReady) return
-      const filePath = openFileRef.current
-      if (!filePath) return
-      const result = await lspClient.definition(filePath, pos.lineNumber - 1, pos.column - 1).catch(() => null)
-      if (!result) return
-      const locs = Array.isArray(result) ? result : [result]
-      if (!locs.length) return
-      const loc = locs[0]
-      const uri = monaco.Uri.parse(loc.uri)
-      const absPath = uri.fsPath || uri.path
-      if (absPath === filePath) {
-        // same-file: 직접 이동
-        ed.revealLineInCenter(loc.range.start.line + 1)
-        ed.setPosition({ lineNumber: loc.range.start.line + 1, column: loc.range.start.character + 1 })
-      } else {
-        await navigateCrossFileRef.current(absPath, loc.range.start.line + 1, loc.range.start.character + 1)
-      }
+    ed.addAction({
+      id: 'tutor.attachSelectionToChat',
+      label: '선택한 코드를 채팅에 추가',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 10,
+      run: (source) => {
+        const model = source.getModel()
+        const store = useStore.getState()
+        const root = store.projectStatus?.dir ?? ''
+        if (!model || !isProjectFile(model.uri.fsPath, root)) return
+        const path = model.uri.fsPath.slice(root.replace(/\/+$/, '').length + 1)
+        const references = (source.getSelections() ?? []).flatMap(selection => {
+          const reference = createChatCodeReference(path, selection, model.getValueInRange(selection))
+          return reference ? [reference] : []
+        })
+        if (!store.attachChatCode(references)) {
+          store.addToast('코드는 최대 8곳, 총 32KB까지 첨부할 수 있습니다. 선택 범위를 줄이거나 기존 첨부를 제거해 주세요.', 'info')
+        }
+      },
     })
+
   }, [markFileChanged, setOpenFileContent])
 
   // 콘텐츠/스킬/solvedHoles 변경 시 데코레이션 재적용 (외부 갱신 반영)
@@ -1464,6 +1396,8 @@ export default function Editor() {
               scrollBeyondLastLine: true,
               wordWrap: 'on',
               glyphMargin: true,
+              // Keep hover/signature popups visible beyond the clipped editor panels.
+              fixedOverflowWidgets: true,
               folding: true,
               renderLineHighlight: 'line',
               tabSize: 2,
@@ -1474,10 +1408,12 @@ export default function Editor() {
               acceptSuggestionOnCommitCharacter: true,
               wordBasedSuggestions: 'off',
               codeLens: true,
+              gotoLocation: { multipleReferences: 'peek', alternativeDefinitionCommand: 'editor.action.goToReferences' },
             }}
           />
-          {skillLevel === 'newbie' && editorInstance && (
+          {editorInstance && (
             <QuizOverlay
+              key={openFile}
               editor={editorInstance}
               filename={filename}
               content={openFileContent}
@@ -1509,7 +1445,7 @@ export default function Editor() {
 
       {/* 실행 출력 패널 */}
       {showOutput && (
-        <div className="run-output-panel">
+        <OutputPanel>
           <div className="run-output-header">
             <span>{outputTitle}</span>
             {(isRunning || isTesting) && <span className="run-output-running">● 실행 중</span>}
@@ -1533,7 +1469,7 @@ export default function Editor() {
             ))}
             <div ref={outputEndRef} />
           </div>
-        </div>
+        </OutputPanel>
       )}
     </div>
   )

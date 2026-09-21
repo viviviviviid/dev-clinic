@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { canUseReviewControl, useStore } from './index.ts'
+import { chatCodeKey } from '../lib/chatCodeContext.ts'
 
 test('manual review is disabled for idle code but test context remains independently actionable', () => {
   assert.equal(canUseReviewControl('idle'), false)
@@ -87,6 +88,10 @@ test('resetWorkspace clears project-scoped state in one store update', () => {
     },
     solvedHoles: priorSolvedHoles,
     chatMessages: [{ role: 'user', content: 'old chat' }],
+    feedbackTab: 'chat',
+    chatFocusRequest: 4,
+    chatCodeReferences: [{ path: 'old.ts', startLine: 1, startColumn: 1, endLine: 1, endColumn: 4, code: 'old' }],
+    pendingChatAnswer: { answer: { markerType: 'hole', question: 'old question', reference: { path: 'old.ts', startLine: 1, endLine: 1, startColumn: 1, endColumn: 4, code: 'old' } }, fileContent: 'old' },
     isChatStreaming: true,
     currentChatStreaming: 'partial chat',
     showQuickOpen: true,
@@ -140,6 +145,10 @@ test('resetWorkspace clears project-scoped state in one store update', () => {
   assert.deepEqual([...state.solvedHoles], [])
   assert.notEqual(state.solvedHoles, priorSolvedHoles)
   assert.deepEqual(state.chatMessages, [])
+  assert.equal(state.feedbackTab, 'tasks')
+  assert.equal(state.chatFocusRequest, 0)
+  assert.deepEqual(state.chatCodeReferences, [])
+  assert.equal(state.pendingChatAnswer, null)
   assert.equal(state.isChatStreaming, false)
   assert.equal(state.currentChatStreaming, '')
   assert.equal(state.showQuickOpen, false)
@@ -150,6 +159,68 @@ test('resetWorkspace clears project-scoped state in one store update', () => {
   assert.equal(state.skillLevel, 'experienced')
   assert.equal(state.showMinimap, true)
   assert.equal(state.wsStatus, 'connected')
+})
+
+test('attaching code opens and focuses chat without sending, and rejected additions leave it unchanged', () => {
+  useStore.getState().resetWorkspace()
+  const reference = { path: 'client.go', startLine: 15, startColumn: 1, endLine: 17, endColumn: 8, code: 'cancel()' }
+  assert.equal(useStore.getState().attachChatCode([reference]), true)
+  assert.equal(useStore.getState().feedbackTab, 'chat')
+  assert.equal(useStore.getState().chatFocusRequest, 1)
+  assert.deepEqual(useStore.getState().chatMessages, [])
+  assert.equal(useStore.getState().isChatStreaming, false)
+
+  useStore.getState().attachChatCode([{ ...reference, code: 'cancelLater()' }])
+  assert.equal(useStore.getState().chatCodeReferences.length, 1)
+  assert.equal(useStore.getState().chatCodeReferences[0].code, 'cancelLater()')
+  assert.equal(useStore.getState().chatFocusRequest, 2)
+  useStore.getState().setFeedbackTab('tasks')
+  const before = useStore.getState()
+  assert.equal(before.attachChatCode([{ ...reference, code: 'x'.repeat(40_000) }]), false)
+  assert.equal(useStore.getState(), before)
+
+  useStore.getState().removeChatCode(chatCodeKey(reference))
+  assert.deepEqual(useStore.getState().chatCodeReferences, [])
+  useStore.getState().attachChatCode([])
+  assert.equal(useStore.getState().feedbackTab, 'chat')
+  assert.equal(useStore.getState().chatFocusRequest, 3)
+})
+
+test('answer requests open chat, preserve drafts and editor state, and can be consumed only once', () => {
+  useStore.getState().resetWorkspace()
+  const reference = { path: 'main.go', startLine: 2, endLine: 4, startColumn: 1, endColumn: 15, code: '// [TUTOR:HOLE]\nwork()\n// [TUTOR:END]' }
+  const request = { answer: { markerType: 'hole', question: '구현하세요', reference }, fileContent: 'package main\n' + reference.code }
+  useStore.getState().addTab('/workspace/main.go', request.fileContent)
+  useStore.getState().attachChatCode([{ ...reference, path: 'draft.go' }])
+  useStore.getState().setFeedbackTab('tasks')
+  const before = useStore.getState()
+  assert.equal(before.requestChatAnswer(request), true)
+  assert.equal(useStore.getState().feedbackTab, 'chat')
+  assert.equal(useStore.getState().requestChatAnswer(request), false)
+  assert.deepEqual(useStore.getState().takeChatAnswer(), request)
+  assert.equal(useStore.getState().takeChatAnswer(), null)
+  const after = useStore.getState()
+  for (const key of ['openFileContent', 'openTabs', 'changedFiles', 'solvedHoles', 'chatCodeReferences', 'chatMessages']) assert.equal(after[key], before[key])
+  after.startChatStream()
+  assert.equal(useStore.getState().requestChatAnswer(request), false)
+  useStore.getState().cancelChatStream()
+  useStore.getState().setWorkspaceMutationLocked(true)
+  assert.equal(useStore.getState().requestChatAnswer(request), false)
+  useStore.getState().resetWorkspace()
+})
+
+test('sent messages keep independent code snapshots when draft attachments change', () => {
+  useStore.getState().resetWorkspace()
+  const reference = { path: 'client.go', startLine: 15, startColumn: 1, endLine: 15, endColumn: 8, code: 'cancel()' }
+  useStore.getState().attachChatCode([reference])
+  useStore.getState().addUserChatMessage('설명해줘', useStore.getState().chatCodeReferences)
+  useStore.getState().clearChatCode()
+  reference.code = 'changed()'
+  useStore.getState().attachChatCode([reference])
+  assert.equal(useStore.getState().chatMessages[0].codeReferences[0].code, 'cancel()')
+  assert.equal(useStore.getState().chatCodeReferences[0].code, 'changed()')
+  useStore.getState().addUserChatMessage('첨부 없는 질문')
+  assert.deepEqual(useStore.getState().chatMessages[1], { role: 'user', content: '첨부 없는 질문' })
 })
 
 test('project status keeps the websocket project identity in sync', () => {

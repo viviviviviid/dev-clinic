@@ -1,6 +1,8 @@
 import { useStore } from '../store'
 import type { ChatMessage, FileEntry, ProjectStatus, QuizData } from '../store'
 import { ApiError, apiFetch, apiJson } from '../lib/api'
+import { createChatPayload } from '../lib/chatCodeContext'
+import type { ChatCodeReference, ChatAnswerRequest } from '../lib/chatCodeContext'
 import {
   reviewSessionDecision,
   sameClientReviewSnapshot,
@@ -524,10 +526,12 @@ export function useProject() {
     fileContent: string,
     chatHistory: ChatMessage[],
     signal?: AbortSignal,
+    codeReferences: ChatCodeReference[] = [],
+    answerRequest?: ChatAnswerRequest,
   ): Promise<ReadableStream<Uint8Array>> {
     const response = await apiFetch('/api/chat', {
       method: 'POST',
-      body: JSON.stringify({ message, fileContent, chatHistory }),
+      body: JSON.stringify(createChatPayload(message, fileContent, chatHistory, codeReferences, answerRequest)),
       signal,
     })
     return requireStream(response)

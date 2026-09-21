@@ -27,7 +27,7 @@ import (
 
 const maxRequestBody = 8 << 20 // 8 MiB
 
-func main() {
+func runClinic() {
 	config.Load("config.toml")
 	if err := config.LoadPublic(context.Background()); err != nil {
 		log.Fatal(err)
@@ -37,7 +37,14 @@ func main() {
 		log.Fatal(err)
 	}
 	ai.Init()
+	server := newClinicServer()
+	log.Printf("clinic starting on http://%s (base_dir=%s, ai=%s)", server.Addr, config.Global.BaseDir, config.Global.AIProvider)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+}
 
+func newClinicServer() *http.Server {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery(), localAccessMiddleware())
 	if err := r.SetTrustedProxies(nil); err != nil {
@@ -61,16 +68,12 @@ func main() {
 	registerAPIRoutes(apiGroup)
 
 	addr := "127.0.0.1:" + config.Global.Server.Port
-	server := &http.Server{
+	return &http.Server{
 		Addr:              addr,
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    1 << 20,
-	}
-	log.Printf("clinic starting on http://%s (base_dir=%s, ai=%s)", addr, config.Global.BaseDir, config.Global.AIProvider)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
 	}
 }
 

@@ -14,9 +14,10 @@ import (
 )
 
 type ChatReq struct {
-	Message     string           `json:"message"`
-	FileContent string           `json:"fileContent"`
-	ChatHistory []ai.ChatMessage `json:"chatHistory"`
+	Message       string                `json:"message"`
+	FileContent   string                `json:"fileContent"`
+	ChatHistory   []ai.ChatMessage      `json:"chatHistory"`
+	AnswerRequest *ai.ChatAnswerRequest `json:"answerRequest,omitempty"`
 }
 
 // Chat streams an AI response to a user's question.
@@ -24,6 +25,11 @@ type ChatReq struct {
 func Chat(c *gin.Context) {
 	var req ChatReq
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := req.AnswerRequest.Validate(req.FileContent); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -67,7 +73,7 @@ func Chat(c *gin.Context) {
 		ctx,
 		tutorContent, req.FileContent,
 		feedbackHistory, req.ChatHistory,
-		req.Message, skillLevel,
+		req.Message, skillLevel, req.AnswerRequest,
 		func(chunk string) { sendChunk(chunk) },
 	)
 	if err != nil {

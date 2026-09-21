@@ -18,7 +18,7 @@ const (
 	maxGeneratedPathBytes  = 240
 	maxGeneratedFileBytes  = 256 << 10
 	maxGeneratedTotalBytes = 2 << 20
-	maxQuizItemCount       = 256
+	maxQuizItemCount       = 4 // Combined HOLE/BUG budget across all files in one chapter.
 	maxQuizQuestionRunes   = 1000
 	maxQuizHintRunes       = 2000
 	maxTopicNameRunes      = 120
@@ -235,6 +235,9 @@ func validateGeneratedFiles(resp codeFilesResponse) (map[string]string, error) {
 }
 
 func validateQuiz(resp quizResponse, expected []quizMarker) (map[string]QuizItem, error) {
+	if len(resp.Items) > maxQuizItemCount || len(expected) > maxQuizItemCount {
+		return nil, fmt.Errorf("chapter quiz count exceeds %d", maxQuizItemCount)
+	}
 	if len(resp.Items) != len(expected) {
 		return nil, fmt.Errorf("quiz item count %d does not match marker count %d", len(resp.Items), len(expected))
 	}

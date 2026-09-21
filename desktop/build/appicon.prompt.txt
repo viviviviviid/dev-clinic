@@ -1,0 +1,8 @@
+Generator: built-in image_gen (no CLI fallback)
+
+Use case: logo-brand. Create one finished production macOS app icon for a Korean coding rehabilitation center (코딩 재활센터). This is a calm, welcoming rehabilitation clinic logo. A single very simple front-facing white clinic building, compact geometric facade with a gently rounded gabled roof, a bold mint/teal medical plus centered high on the facade, one dark teal rounded doorway centered at the bottom and two simple small mint windows on either side. Render the building as one clear logo silhouette, not a realistic scene. Background is a rich muted teal rounded-square macOS icon tile (#26796c family), with very subtle soft shading and crisp edges, light pale mint highlights. Modern minimal premium vector-like illustration, readable at 24px, substantial central mark occupying about 65 percent of tile, no tiny details. Single icon only, orthographic straight-on, symmetrically balanced, no typography, no letters, no text, no coding characters, no watermark, no frame, no scene, no presentation board. Square 1024x1024 canvas. The rounded-square tile should occupy 84 percent of the canvas width and height, centered, with fully transparent outer margins and corners. Preserve real alpha transparency outside the tile; no checkerboard or solid outer background. Return the completed icon as a PNG asset.
+
+Project assets resized from the generated PNG with sips, preserving alpha:
+- desktop/build/appicon.png: 1024 x 1024, Wails packaging source
+- frontend/public/rehab-logo.png: 256 x 256, screen logo
+- frontend/public/favicon.png: 32 x 32, browser icon

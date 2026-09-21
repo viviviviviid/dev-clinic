@@ -61,10 +61,10 @@
 }
 
 .dashboard-logo {
-  font-size: 1.85rem;
-  line-height: 1;
+  display: block;
+  width: 44px;
+  height: 44px;
   flex-shrink: 0;
-  filter: drop-shadow(0 2px 8px rgba(0, 102, 204, 0.15));
 }
 
 .dashboard-title {
@@ -975,8 +975,10 @@
   font-weight: 600;
 }
 
-.loading-pill {
-  font-size: 4rem;
+.loading-logo {
+  display: block;
+  width: 88px;
+  height: 88px;
   filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.1));
   animation: pulse-soft 2s ease-in-out infinite;
 }

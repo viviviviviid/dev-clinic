@@ -19,7 +19,7 @@ func TestClinicStartupHelper(t *testing.T) {
 		return
 	}
 	os.Args = []string{"clinic", os.Args[len(os.Args)-1]}
-	main()
+	runClinic()
 }
 
 func TestRunScriptStartsClinicWithoutConfigFiles(t *testing.T) {

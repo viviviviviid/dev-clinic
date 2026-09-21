@@ -3,7 +3,9 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import BootErrorScreen from './components/BootError'
 import AppErrorBoundary from './components/ErrorBoundary'
-import { resolveBootConfig } from './lib/bootConfig'
+import { initializeRuntimeConfig } from './lib/runtimeConfig'
+import { isDesktop } from './lib/desktop'
+import { installDesktopLifecycle } from './lib/desktopLifecycle'
 
 function findOrCreateRoot(): HTMLElement {
   const existing = document.getElementById('root')
@@ -15,6 +17,7 @@ function findOrCreateRoot(): HTMLElement {
 }
 
 const root = createRoot(findOrCreateRoot())
+installDesktopLifecycle()
 
 // A browser can keep an old entry chunk open while a Vercel deployment removes
 // one of its lazy-loaded Monaco language chunks. Reload once into the current
@@ -38,7 +41,11 @@ function renderBootError(error: unknown) {
 
 async function bootstrap() {
   try {
-    resolveBootConfig(import.meta.env)
+    const config = await initializeRuntimeConfig(import.meta.env)
+    if (isDesktop()) {
+      const health = await fetch(`${config.localUrl}/health`, { signal: AbortSignal.timeout(5_000) })
+      if (!health.ok) throw new Error('앱의 로컬 서버에 연결하지 못했습니다. 앱을 다시 실행해 주세요.')
+    }
     const { default: App } = await import('./App.tsx')
     root.render(
       <StrictMode>

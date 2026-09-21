@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { desktopBridge, DESKTOP_CALLBACK_URL, isDesktop } from '../../lib/desktop'
 import './Auth.css'
 
 export default function AuthScreen() {
@@ -11,19 +12,29 @@ export default function AuthScreen() {
     setPending(true)
     setError('')
     try {
-      const { error: signInError } = await supabase.auth.signInWithOAuth({
+      const bridge = desktopBridge()
+      const { data, error: signInError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin,
+          redirectTo: bridge ? DESKTOP_CALLBACK_URL : window.location.origin,
+          skipBrowserRedirect: Boolean(bridge),
           queryParams: { prompt: 'select_account' },
         },
       })
       if (signInError) {
         setError(signInError.message || 'Google 로그인을 시작하지 못했습니다.')
         setPending(false)
+        return
+      }
+      if (bridge) {
+        if (!data.url) throw new Error('Google 로그인 주소를 만들지 못했습니다.')
+        const code = await bridge.Login(data.url)
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+        if (exchangeError) throw exchangeError
+        setPending(false)
       }
     } catch (loginError: unknown) {
-      setError(loginError instanceof Error ? loginError.message : 'Google 로그인을 시작하지 못했습니다.')
+      setError(loginError instanceof Error ? loginError.message : typeof loginError === 'string' ? loginError : 'Google 로그인을 시작하지 못했습니다.')
       setPending(false)
     }
   }
@@ -31,7 +42,7 @@ export default function AuthScreen() {
   return (
     <main className="auth-entrance">
       <header className="auth-brand">
-        <span className="clinic-cross" aria-hidden="true" />
+        <img className="auth-logo" src="/rehab-logo.png" width="48" height="48" alt="" />
         <span>코딩 재활센터<small>매일 조금씩, 다시 시작하는 곳</small></span>
       </header>
       <div className="clinic-scene" aria-hidden="true">
@@ -40,7 +51,7 @@ export default function AuthScreen() {
         <div className="clinic-floor" />
         <div className="clinic-bench"><i /><i /><i /></div>
         <div className="clinic-plant"><i /><i /><i /><i /><span /></div>
-        <div className="clinic-room-sign"><span className="clinic-cross" /><span>코딩 재활센터<small>당신의 다음 시작을 응원합니다.</small></span></div>
+        <div className="clinic-room-sign"><img src="/rehab-logo.png" width="40" height="40" alt="" /><span>코딩 재활센터<small>당신의 다음 시작을 응원합니다.</small></span></div>
         <div className="clinic-doorway">
           <div className="clinic-door clinic-door-left"><span className="door-reflection" /><span className="door-band">작은 연습이</span><span className="door-handle" /></div>
           <div className="clinic-door clinic-door-right"><span className="door-reflection" /><span className="door-band">변화를 만듭니다</span><span className="door-handle" /></div>
@@ -66,15 +77,18 @@ export default function AuthScreen() {
             <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
             <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
           </svg>
-          {pending ? 'Google로 이동 중...' : 'Google로 로그인'}
+          {pending ? isDesktop() ? '브라우저에서 로그인해 주세요…' : 'Google로 이동 중...' : 'Google로 로그인'}
         </button>
+        {pending && isDesktop() && (
+          <button type="button" className="auth-google-btn" onClick={() => void desktopBridge()?.CancelLogin()}>로그인 취소</button>
+        )}
         <p className="auth-login-note">내 Google 계정으로 학습을 이어가세요.</p>
         <details className="auth-local-note">
           <summary>처음 방문하셨나요?</summary>
-          <p>로그인한 뒤 오늘의 미션을 시작할 수 있어요. 코드를 작성할 때는 이 화면을 연 Mac에서 <code>clinic</code>을 실행해 주세요.</p>
+          <p>{isDesktop() ? 'Google 로그인은 기본 브라우저에서 진행하며, 완료하면 앱으로 돌아옵니다. 앱이 학습에 필요한 로컬 서버를 자동으로 실행합니다.' : <>로그인한 뒤 오늘의 미션을 시작할 수 있어요. 코드를 작성할 때는 이 화면을 연 Mac에서 <code>clinic</code>을 실행해 주세요.</>}</p>
         </details>
       </section>
-      <footer className="auth-footer"><span>오늘의 작은 연습이, 내일의 자신감으로.</span><a href="/privacy">개인정보 처리방침</a></footer>
+      <footer className="auth-footer"><span>오늘의 작은 연습이, 내일의 자신감으로.</span><a href={isDesktop() ? 'https://tutor.abcfe.net/privacy' : '/privacy'} target={isDesktop() ? '_blank' : undefined} rel="noreferrer">개인정보 처리방침</a></footer>
     </main>
   )
 }

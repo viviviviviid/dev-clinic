@@ -177,25 +177,12 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
-func (c *Client) StreamChat(ctx context.Context, tutorContent, fileContent string, feedbackHistory []string, chatHistory []ChatMessage, userMessage, skillLevel string, cb StreamCallback) error {
-	if err := requireTextLimit("user message", userMessage, maxChatMessageBytes); err != nil {
-		return err
-	}
-	if err := requireTextLimit("TUTORSYS.md", tutorContent, maxTutorContentBytes); err != nil {
-		return err
-	}
-	fileContent = clipUTF8(fileContent, maxChatFileBytes)
-	data, err := marshalUntrustedData(map[string]any{
-		"tutorSystem":   tutorContent,
-		"openFile":      fileContent,
-		"priorFeedback": recentStrings(feedbackHistory, 3, 32<<10),
-		"chatHistory":   recentChatMessages(chatHistory),
-		"question":      userMessage,
-	})
+func (c *Client) StreamChat(ctx context.Context, tutorContent, fileContent string, feedbackHistory []string, chatHistory []ChatMessage, userMessage, skillLevel string, answer *ChatAnswerRequest, cb StreamCallback) error {
+	system, prompt, err := buildChatPrompt(tutorContent, fileContent, feedbackHistory, chatHistory, userMessage, skillLevel, answer)
 	if err != nil {
 		return err
 	}
-	return c.stream(ctx, chatSystemPrompt(skillLevel), "학습자의 질문에 필요한 범위만 답하세요.\n\n"+data, cb)
+	return c.stream(ctx, system, prompt, cb)
 }
 
 func (c *Client) GenerateCurriculum(ctx context.Context, language, topic, skillLevel string) (string, error) {
@@ -268,20 +255,15 @@ func (c *Client) GenerateCurriculum(ctx context.Context, language, topic, skillL
 Step 1
 
 ## 이 단계에서 추가하는 것
-[Step 1에서 새로 만드는 함수/파일 목록과 각각의 역할.
-"이전 단계 없음 — 프로젝트의 기초 뼈대를 만듭니다."]
+[학습을 시작하는 문제와 출발점, 이번 단계에서 만들 동작과 그 필요성,
+완료 후 직접 확인할 결과와 배울 개념을 2~3개의 짧은 문단으로 설명. 아직 배우지 않은 이전 단계를 가정하지 않음.]
 
 ## 현재 과제
-### 구현할 것 (HOLE)
-1. **[파일명] - [함수/구조체명]**: [무엇을 구현해야 하는지 2~3문장 명확히]
-   - 왜 필요한가: [이 구현이 최종 프로그램에서 어떤 역할을 하는지]
-   - 단계별 접근: [1단계 → 2단계 → 3단계 순서로 어떻게 작성해야 하는지]
-   - 사용할 것: [관련 표준 라이브러리 함수, 타입, 키워드]
+### 동작 목표
+[이번 단계에서 구현하거나 바로잡을 동작을 사용자가 관찰할 수 있는 결과로 설명. 파일·함수 이름, API 호출, 코드 조각, 풀이 순서, HOLE/BUG 분류를 넣지 않음.]
 
-### 찾아서 고칠 것 (BUG)
-1. **[파일명] - [함수/위치]**: [어떤 종류의 버그인지]
-   - 증상: [이 버그가 있으면 어떤 문제가 발생하는지 구체적으로]
-   - 힌트: [어떤 종류의 오류인지 — 반복 범위? 조건 방향? 연산 순서?]
+### 성공 기준
+[정상 동작과 필요한 실패·경계 상황에서 어떤 결과가 나와야 하는지 검증 가능한 기준을 작성. 해결 방법 대신 기대하는 동작을 명시.]
 
 ## 파일 구성
 - [파일명]: [이 파일의 역할과 구조 설명 (Step 1에서 생성되는 파일들)]
@@ -329,10 +311,10 @@ func (c *Client) GenerateCodeFiles(ctx context.Context, tutorContent string, exi
 - existingFiles가 비어 있으면 실행 가능한 최소 프로젝트 뼈대를 만드세요.
 - 기존 파일이 있으면 이전 단계의 HOLE/BUG를 올바른 코드로 완성하되 마커 없는 학습자 코드는 보존하세요.
 - 새 [TUTOR:HOLE]/[TUTOR:BUG]는 현재 단계의 새 기능에만 추가하세요.
-- HOLE과 BUG를 각각 하나 이상 만드세요.
+- HOLE과 BUG를 각각 하나 이상 만들고, 현재 챕터의 모든 파일을 합쳐 총 4개 이하로 제한하세요. 기존 파일에 남아 있는 문제도 이 합계에 포함됩니다.
 - 현재 단계의 과제로 제시한 구현·수정의 정답 코드를 marker 밖에 미리 작성하지 마세요. 필요한 스캐폴드와 이전 단계의 완료 코드만 marker 밖에 둘 수 있습니다.
 - 각 과제 범위는 독립된 %s 주석 시작 줄([TUTOR:HOLE] 또는 [TUTOR:BUG])과 독립된 %s 주석 종료 줄([TUTOR:END])로 감싸세요. 설명은 시작 marker와 같은 줄에만 쓰세요.
-- marker 하나에는 한 가지 작은 구현 또는 한 가지 국소 버그만 넣으세요. 시작 marker와 [TUTOR:END] 사이의 비주석 코드 줄은 최대 4줄입니다. 구조체 여러 개와 메서드 전체처럼 큰 묶음은 독립 marker로 나누세요.
+- marker 하나에는 한 가지 작은 구현 또는 한 가지 국소 버그만 넣으세요. 시작 marker와 [TUTOR:END] 사이의 비주석 코드 줄은 최대 4줄입니다. 총 4개 문제 안에서 다룰 핵심 동작만 선택하고, 학습 목표가 아닌 준비·반복 코드는 완성된 보조 코드로 제공하세요.
 - marker는 함수·메서드·조건문의 본문 안에만 두세요. 함수 선언, 매개변수, 중괄호, 클래스/구조체 선언은 marker 밖에 남겨 학습자가 선택된 본문만 수정하게 하세요.
 - 시작 marker와 [TUTOR:END] 사이에는 학습자가 에디터에서 직접 바꿀 컴파일 가능한 placeholder/bug 본문을 한 줄 이상 넣으세요.
 - marker 범위는 정확히 1:1로 닫고 중첩하거나 겹치지 마세요. 범위 밖의 시그니처와 주변 코드는 marker가 남아 있는 초기 상태에서도 컴파일되어야 합니다.
@@ -627,11 +609,12 @@ func (c *Client) GenerateNextStep(ctx context.Context, tutorContent, nextStep st
 업데이트 규칙:
 1. "## 현재 단계" 값을 입력 nextStep으로 변경
 2. "## 커리큘럼 단계"에서 완료된 단계들을 - [x]로 표시
-3. "## 이 단계에서 추가하는 것" 섹션을 새 단계의 함수/파일로 업데이트
-   - 이전 단계에서 이어받는 것(완성된 코드)과 이번에 새로 추가하는 것을 명확히 구분
-4. "## 현재 과제" 섹션을 새 코드에 대한 HOLE/BUG로만 업데이트
-   - 이전 단계에서 이미 완성된 함수는 과제에 포함하지 마세요
-   - 이번 단계에서 새로 만드는 함수/기능에만 HOLE/BUG를 설정하세요
+3. "## 이 단계에서 추가하는 것" 섹션을 이번 단계의 소개로 업데이트
+   - 현재 코드와 이전 단계에서 갖춘 동작, 이번 단계의 목적과 필요성, 완료 후 확인할 결과와 배울 개념을 연결해 2~3개의 짧은 문단으로 설명
+   - 함수/파일 목록이나 풀이 순서로 대신하지 마세요
+4. "## 현재 과제" 섹션을 이번 단계의 "### 동작 목표"와 "### 성공 기준"으로 업데이트
+   - 이전 단계에서 이미 완성된 동작은 과제로 반복하지 마세요
+   - 이번에 구현하거나 고칠 동작과 검증 가능한 결과만 설명하고, 파일·함수 이름, API 호출, 코드 조각, 풀이 순서, HOLE/BUG 분류는 넣지 마세요
 5. "## 개념 설명" 섹션을 새 기능의 핵심 개념으로 교체
 6. "## 파일 구성" 섹션에 이번 단계에서 추가/수정되는 파일 정보를 반영
 7. "## 최종 결과물", "## 학습자 목표", "## 언어 & 환경", "## 학습 수준", "## 진행 기록" 섹션은 기존 내용을 글자와 공백까지 그대로 복사

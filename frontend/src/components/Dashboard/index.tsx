@@ -753,7 +753,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
       <div className="dashboard-overlay">
         <div className="dashboard-container" style={{ alignItems: 'center', justifyContent: 'center' }}>
           <div className="rehab-loading">
-            <div className="loading-pill">💊</div>
+            <img className="loading-logo" src="/rehab-logo.png" width="88" height="88" alt="" />
             <p>재활 프로그램 준비중...</p>
           </div>
         </div>
@@ -768,7 +768,7 @@ export default function DashboardScreen({ onMissionReady, onOpenSettings }: Prop
         {/* ── Sidebar ── */}
         <div className="dashboard-sidebar">
           <div className="dashboard-logo-area">
-            <span className="dashboard-logo">💊</span>
+            <img className="dashboard-logo" src="/rehab-logo.png" width="44" height="44" alt="" />
             <div>
               <div className="dashboard-title">재활센터</div>
               <div className="dashboard-subtitle">코딩 치료 클리닉</div>

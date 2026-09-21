@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { describeClinicFailure } from './clinicFailure.ts'
+import { describeClinicFailure, isClinicAuthFailure } from './clinicFailure.ts'
+
+test('file permission failures do not replace the workspace with an auth screen', () => {
+  assert.equal(isClinicAuthFailure(403, 'access denied'), false)
+  assert.equal(isClinicAuthFailure(403, 'invalid project file'), false)
+  assert.equal(isClinicAuthFailure(401, 'invalid token'), true)
+  assert.equal(isClinicAuthFailure(403, 'denied', 'account_not_allowed'), true)
+  assert.equal(isClinicAuthFailure(403, 'origin not allowed'), true)
+  assert.equal(isClinicAuthFailure(403, 'invalid host'), true)
+  assert.doesNotMatch(describeClinicFailure({ status: 403, kind: 'http', message: 'access denied' }).guidance, /ALLOWED_ORIGINS/)
+})
 
 test('legacy invalid token response offers session renewal without accusing the account', () => {
   const view = describeClinicFailure({status:401,kind:'http',message:'invalid token'})

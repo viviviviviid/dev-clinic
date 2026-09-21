@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/coding-tutor/internal/config"
 	"github.com/golang-jwt/jwt/v4"
+	"github.com/gorilla/websocket"
 )
 
 func configureWSTest(t *testing.T) string {
@@ -66,6 +68,57 @@ func TestAuthenticateRequest(t *testing.T) {
 	}
 	if userID != "user-123" {
 		t.Fatalf("AuthenticateRequest() user = %q", userID)
+	}
+}
+
+func TestDesktopWebSocketStillRequiresJWT(t *testing.T) {
+	token := configureWSTest(t)
+	t.Setenv("ALLOWED_ORIGINS", "wails://wails")
+	if _, err := AuthenticateRequest(websocketRequest("wails://wails", token)); err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range []*http.Request{
+		websocketRequest("wails://wails", "invalid"),
+		websocketRequest("null", token),
+		websocketRequest("wails://evil", token),
+	} {
+		if _, err := AuthenticateRequest(req); err == nil {
+			t.Fatal("desktop request bypassed authentication/origin validation")
+		}
+	}
+}
+
+func TestServerCancellationClosesUpgradedWebSocket(t *testing.T) {
+	token := configureWSTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(finished)
+		conn, _, err := Upgrade(w, r.WithContext(ctx))
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+	dialer := websocket.Dialer{Subprotocols: []string{applicationSubprotocol, token}}
+	header := http.Header{"Origin": {"https://tutor.abcfe.net"}}
+	conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	cancel()
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("WebSocket remained open after cancellation")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("WebSocket handler did not terminate")
 	}
 }
 

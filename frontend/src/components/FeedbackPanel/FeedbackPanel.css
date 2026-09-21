@@ -657,7 +657,8 @@
 }
 
 .chat-input-area {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-height: 0;
   border-top: 1px solid #21262d;
   padding: 8px;
   display: flex;
@@ -667,7 +668,8 @@
 }
 
 .chat-textarea {
-  flex: 1;
+  flex-shrink: 0;
+  width: 100%;
   background: #161b22;
   border: 1px solid #30363d;
   border-radius: 6px;
@@ -678,6 +680,79 @@
   resize: none;
   font-family: inherit;
   outline: none;
+}
+
+.chat-composer {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-code-references {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.chat-code-reference {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  border: 1px solid #30363d;
+  border-radius: 5px;
+  background: #161b22;
+  color: #c9d1d9;
+  font-size: 12px;
+}
+
+.chat-code-reference details {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-code-reference summary {
+  padding: 5px 8px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  font-family: 'Consolas', 'Courier New', monospace;
+}
+
+.chat-code-reference pre {
+  margin: 0;
+  padding: 8px;
+  border-top: 1px solid #30363d;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre;
+  font-size: 11px;
+}
+
+.chat-code-reference button {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: #8b949e;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 16px;
+}
+
+.chat-code-reference button:hover {
+  color: #fff;
+}
+
+.chat-code-reference summary:focus-visible,
+.chat-code-reference button:focus-visible {
+  outline: 2px solid #58a6ff;
+  outline-offset: -2px;
 }
 
 .chat-textarea:focus {
@@ -735,6 +810,35 @@
 }
 
 /* Current position is separate from completion. */
+.tasks-step-intro {
+  border-left: 2px solid #58a6ff;
+  padding-left: 12px;
+}
+
+.tasks-step-eyebrow {
+  margin: 18px 0 6px;
+  color: #8b949e;
+  font-size: 12px;
+}
+
+.tasks-step-title {
+  margin: 0 0 12px;
+  color: #e6edf3;
+  font-size: 17px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.tasks-step-overview {
+  font-size: 15px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.tasks-step-overview p + p {
+  margin-top: 12px;
+}
+
 .tasks-progress-section {
   display: flex;
   align-items: center;

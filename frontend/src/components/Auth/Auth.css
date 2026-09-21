@@ -37,10 +37,7 @@
   color: #536f68;
 }
 
-.clinic-cross { position: relative; display: block; width: 32px; height: 32px; flex: 0 0 auto; }
-.clinic-cross::before, .clinic-cross::after { content: ''; position: absolute; border-radius: 2px; background: var(--clinic-teal); }
-.clinic-cross::before { width: 10px; height: 32px; left: 11px; top: 0; }
-.clinic-cross::after { width: 32px; height: 10px; top: 11px; left: 0; }
+.auth-logo { display: block; width: 48px; height: 48px; flex: 0 0 auto; }
 
 .clinic-scene { position: absolute; inset: 0; pointer-events: none; }
 .clinic-back-wall { position: absolute; inset: 13% 12% 22%; background: #f1f7f3; box-shadow: inset 0 0 85px #c8dad2; }
@@ -113,7 +110,7 @@
   .auth-entrance { min-height: max(720px, 100svh); padding: 128px 32px 120px; }
   .auth-brand { top: 26px; left: 24px; font-size: 17px; }
   .auth-brand small { font-size: 10px; }
-  .auth-brand .clinic-cross { transform: scale(.85); }
+  .auth-brand .auth-logo { width: 40px; height: 40px; }
   .clinic-door-frame { inset: 97px 12px 30px; border-width: 9px; border-top-width: 15px; }
   .clinic-doorway { inset: 108px 20px 38px; }
   .clinic-door-sensor { top: 99px; }

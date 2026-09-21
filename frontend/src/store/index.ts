@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import type { User } from '@supabase/supabase-js'
+import { chatCodeKey, mergeChatCodeReferences } from '../lib/chatCodeContext.ts'
+import type { ChatCodeReference, PendingChatAnswer } from '../lib/chatCodeContext.ts'
 
 export interface FileEntry {
   name: string
@@ -52,6 +54,8 @@ export interface ProjectStatus {
   dir: string
   language: string
   currentStep: string
+  stepTitle?: string
+  stepOverview?: string
   goal: string
   concept: string
   tasks: string
@@ -66,7 +70,10 @@ export type SkillLevel = 'newbie' | 'normal' | 'experienced'
 export interface ChatMessage {
   role: 'user' | 'ai'
   content: string
+  codeReferences?: ChatCodeReference[]
 }
+
+export type FeedbackTab = 'feedback' | 'tasks' | 'chat'
 
 export interface QuizItem {
   key: string
@@ -206,10 +213,20 @@ export interface AppState {
   clearSolvedHoles: () => void
 
   // Chat
+  feedbackTab: FeedbackTab
+  setFeedbackTab: (tab: FeedbackTab) => void
+  chatFocusRequest: number
+  chatCodeReferences: ChatCodeReference[]
+  attachChatCode: (references: ChatCodeReference[]) => boolean
+  removeChatCode: (key: string) => void
+  clearChatCode: () => void
+  pendingChatAnswer: PendingChatAnswer | null
+  requestChatAnswer: (request: PendingChatAnswer) => boolean
+  takeChatAnswer: () => PendingChatAnswer | null
   chatMessages: ChatMessage[]
   isChatStreaming: boolean
   currentChatStreaming: string
-  addUserChatMessage: (content: string) => void
+  addUserChatMessage: (content: string, codeReferences?: ChatCodeReference[]) => void
   startChatStream: () => void
   addChatChunk: (chunk: string) => void
   cancelChatStream: () => void
@@ -275,6 +292,10 @@ type WorkspaceState = Pick<AppState,
   | 'quizData'
   | 'solvedHoles'
   | 'chatMessages'
+  | 'feedbackTab'
+  | 'chatFocusRequest'
+  | 'chatCodeReferences'
+  | 'pendingChatAnswer'
   | 'isChatStreaming'
   | 'currentChatStreaming'
   | 'showQuickOpen'
@@ -320,6 +341,10 @@ function createWorkspaceState(): WorkspaceState {
     quizData: {},
     solvedHoles: new Set(),
     chatMessages: [],
+    feedbackTab: 'tasks',
+    chatFocusRequest: 0,
+    chatCodeReferences: [],
+    pendingChatAnswer: null,
     isChatStreaming: false,
     currentChatStreaming: '',
     showQuickOpen: false,
@@ -695,11 +720,38 @@ export const useStore = create<AppState>((set, get) => ({
   clearSolvedHoles: () => set({ solvedHoles: new Set() }),
 
   // Chat
+  feedbackTab: 'tasks',
+  setFeedbackTab: (feedbackTab) => set({ feedbackTab }),
+  chatFocusRequest: 0,
+  chatCodeReferences: [],
+  attachChatCode: (references) => {
+    const merged = mergeChatCodeReferences(get().chatCodeReferences, references)
+    if (!merged) return false
+    set((s) => ({ chatCodeReferences: merged, feedbackTab: 'chat', chatFocusRequest: s.chatFocusRequest + 1 }))
+    return true
+  },
+  removeChatCode: (key) => set((s) => ({ chatCodeReferences: s.chatCodeReferences.filter(reference => chatCodeKey(reference) !== key) })),
+  clearChatCode: () => set({ chatCodeReferences: [] }),
+  pendingChatAnswer: null,
+  requestChatAnswer: (request) => {
+    const state = get()
+    if (state.isChatStreaming || state.pendingChatAnswer || state.workspaceMutationLocked) return false
+    set({ pendingChatAnswer: request, feedbackTab: 'chat' })
+    return true
+  },
+  takeChatAnswer: () => {
+    const request = get().pendingChatAnswer
+    if (request) set({ pendingChatAnswer: null })
+    return request
+  },
   chatMessages: [],
   isChatStreaming: false,
   currentChatStreaming: '',
-  addUserChatMessage: (content) =>
-    set((s) => ({ chatMessages: [...s.chatMessages, { role: 'user', content }] })),
+  addUserChatMessage: (content, codeReferences) =>
+    set((s) => ({ chatMessages: [...s.chatMessages, {
+      role: 'user', content,
+      ...(codeReferences?.length ? { codeReferences: codeReferences.map(reference => ({ ...reference })) } : {}),
+    }] })),
   startChatStream: () => set({ isChatStreaming: true, currentChatStreaming: '' }),
   addChatChunk: (chunk) =>
     set((s) => s.isChatStreaming ? { currentChatStreaming: s.currentChatStreaming + chunk } : {}),

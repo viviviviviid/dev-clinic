@@ -204,3 +204,29 @@ test('page lifecycle flushes each pending file and warns only while writes remai
   dispose()
   assert.equal(listeners.size, 0)
 })
+
+test('native close waits for persistence and reports failures without discarding edits', async () => {
+  const listeners = new Map()
+  const target = { addEventListener: (name, listener) => listeners.set(name, listener), removeEventListener: name => listeners.delete(name) }
+  let release
+  let fail = false
+  const barrier = new Promise(resolve => { release = resolve })
+  const autosave = createEditorAutosave({
+    delayMs: 1000,
+    write: async () => { await barrier; if (fail) throw new Error('disk full') },
+    onSaved: () => {}, onError: () => {},
+  })
+  const dispose = installEditorAutosaveLifecycle(autosave, target)
+  autosave.schedule('/project/main.go', 'pending')
+  let result
+  listeners.get('clinic:save-before-close')({ detail: { waitUntil: save => { result = save } } })
+  assert.equal(autosave.hasPendingWrites(), true)
+  release()
+  assert.equal(await result, true)
+  fail = true
+  autosave.schedule('/project/main.go', 'keep this unsaved content')
+  listeners.get('clinic:save-before-close')({ detail: { waitUntil: save => { result = save } } })
+  assert.equal(await result, false)
+  assert.equal(autosave.hasPendingWrites(), true)
+  dispose()
+})

@@ -11,7 +11,7 @@ import (
 
 func TestLocalAccessMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	t.Setenv("ALLOWED_ORIGINS", "https://personal.example")
+	t.Setenv("ALLOWED_ORIGINS", "https://personal.example,wails://wails")
 
 	tests := []struct {
 		name   string
@@ -21,6 +21,8 @@ func TestLocalAccessMiddleware(t *testing.T) {
 	}{
 		{name: "production origin", host: "127.0.0.1:47291", origin: "https://tutor.abcfe.net", want: http.StatusNoContent},
 		{name: "configured origin", host: "localhost:47291", origin: "https://personal.example", want: http.StatusNoContent},
+		{name: "desktop origin", host: "127.0.0.1:47291", origin: "wails://wails", want: http.StatusNoContent},
+		{name: "opaque origin rejected", host: "127.0.0.1:47291", origin: "null", want: http.StatusForbidden},
 		{name: "loopback development", host: "127.0.0.1:47291", origin: "http://localhost:5173", want: http.StatusNoContent},
 		{name: "reject foreign origin", host: "127.0.0.1:47291", origin: "https://evil.example", want: http.StatusForbidden},
 		{name: "reject dns rebinding host", host: "evil.example:47291", origin: "https://tutor.abcfe.net", want: http.StatusForbidden},

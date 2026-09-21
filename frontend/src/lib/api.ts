@@ -1,11 +1,9 @@
 import { supabase } from './supabase'
-import { normalizeLocalUrl } from './localUrl'
-
-const configuredLocalUrl = import.meta.env.VITE_LOCAL_URL?.trim()
-const defaultLocalUrl = 'http://127.0.0.1:47291'
+import { runtimeConfig } from './runtimeConfig'
+import { isClinicAuthFailure } from './clinicFailure'
 
 // The Vercel app is static. Every application API is served by the local clinic.
-export const LOCAL: string = normalizeLocalUrl(configuredLocalUrl || defaultLocalUrl)
+export const LOCAL: string = runtimeConfig().localUrl
 export const WS_BASE: string = LOCAL.replace(/^http/, 'ws')
 
 type ApiErrorKind = 'auth' | 'connection' | 'http' | 'parse'
@@ -129,7 +127,7 @@ export async function apiFetch(path: string, options: ApiFetchOptions = {}): Pro
   if (!response.ok) {
     const details = await readErrorBody(response)
     const message = errorMessage(response.status, details)
-    if (response.status === 401 || response.status === 403) {
+    if ((response.status === 401 || response.status === 403) && isClinicAuthFailure(response.status, message, errorCode(details))) {
       notifyAuthFailure(response.status, message, errorCode(details))
     }
     throw new ApiError(message, {

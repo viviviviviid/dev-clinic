@@ -14,6 +14,8 @@ type Status struct {
 	Dir            string `json:"dir"`
 	Language       string `json:"language"`
 	CurrentStep    string `json:"currentStep"`
+	StepTitle      string `json:"stepTitle"`
+	StepOverview   string `json:"stepOverview"`
 	Goal           string `json:"goal"`
 	Concept        string `json:"concept"`
 	Tasks          string `json:"tasks"`
@@ -66,6 +68,8 @@ func (m *Manager) GetStatus() Status {
 		Dir:            m.dir,
 		Language:       extractSection(m.content, "언어 & 환경"),
 		CurrentStep:    extractSection(m.content, "현재 단계"),
+		StepTitle:      currentStepTitle(m.content),
+		StepOverview:   extractSection(m.content, "이 단계에서 추가하는 것"),
 		Goal:           extractSection(m.content, "학습자 목표"),
 		Concept:        extractSection(m.content, "개념 설명"),
 		Tasks:          extractSection(m.content, "현재 과제"),
@@ -74,6 +78,26 @@ func (m *Manager) GetStatus() Status {
 		TotalSteps:     total,
 		CurrentStepNum: current,
 	}
+}
+
+func currentStepTitle(content string) string {
+	current := extractSection(content, "현재 단계")
+	label, title, hasTitle := strings.Cut(current, ":")
+	if hasTitle && strings.TrimSpace(title) != "" {
+		return strings.TrimSpace(title)
+	}
+	// Initial curricula may store only "Step 1" in the current-step section.
+	for _, line := range strings.Split(extractSection(content, "커리큘럼 단계"), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- [ ] ") && !strings.HasPrefix(line, "- [x] ") {
+			continue
+		}
+		step, title, found := strings.Cut(line[len("- [ ] "):], ":")
+		if found && strings.TrimSpace(step) == strings.TrimSpace(label) {
+			return strings.TrimSpace(title)
+		}
+	}
+	return current
 }
 
 func parseProgress(content string) (totalSteps, currentStepNum int) {

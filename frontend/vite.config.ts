@@ -8,9 +8,11 @@ function clinicConfigPlugin(): Plugin {
   return {
     name: 'clinic-public-config',
     configResolved(config) {
+      if (config.mode === 'desktop') return
       source = JSON.stringify(publicClinicConfig(loadEnv(config.mode, config.envDir, 'VITE_')))
     },
     generateBundle() {
+      if (!source) return
       this.emitFile({ type: 'asset', fileName: 'clinic-config.json', source })
     },
     configureServer(server) {

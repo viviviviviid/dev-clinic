@@ -20,7 +20,7 @@ type Config struct {
 	Server     ServerConfig   `toml:"server"`
 	Supabase   SupabaseConfig `toml:"supabase"`
 	SiteURL    string         `toml:"site_url"`
-	BaseDir    string
+	BaseDir    string         `toml:"base_dir"`
 }
 
 type CodexConfig struct {

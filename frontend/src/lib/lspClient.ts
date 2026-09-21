@@ -1,6 +1,7 @@
 // LSP JSON-RPC 2.0 client over WebSocket
 import { WS_BASE } from './api'
 import { supabase } from './supabase'
+import type { LspCompletionContext, LspCompletionItem, LspCompletionList } from './lspCompletion'
 
 interface Location {
   uri: string
@@ -8,22 +9,6 @@ interface Location {
     start: { line: number; character: number }
     end: { line: number; character: number }
   }
-}
-
-interface LspCompletionItem {
-  label: string | { label: string }
-  kind?: number
-  detail?: string
-  documentation?: string | { kind: string; value: string }
-  insertText?: string
-  insertTextFormat?: number  // 1=PlainText, 2=Snippet
-  filterText?: string
-  sortText?: string
-}
-
-interface LspCompletionList {
-  isIncomplete: boolean
-  items: LspCompletionItem[]
 }
 
 interface LspTextEdit {
@@ -288,16 +273,14 @@ class LspClient {
     filePath: string,
     line: number,
     char: number,
-    triggerChar?: string,
+    context: LspCompletionContext = { triggerKind: 1 },
   ): Promise<LspCompletionList | LspCompletionItem[] | null> {
     const uri = `file://${filePath}`
     const result = await Promise.race([
       this.request('textDocument/completion', {
         textDocument: { uri },
         position: { line, character: char },
-        context: triggerChar
-          ? { triggerKind: 2, triggerCharacter: triggerChar }
-          : { triggerKind: 1 },
+        context,
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ])
@@ -482,8 +465,10 @@ class LspClient {
           inlayHint: { resolveSupport: { properties: [] } },
           codeLens: {},
           completion: {
+            contextSupport: true,
             completionItem: {
               snippetSupport: true,
+              insertReplaceSupport: true,
               documentationFormat: ['plaintext', 'markdown'],
             },
           },

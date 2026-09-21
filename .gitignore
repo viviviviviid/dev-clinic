@@ -12,6 +12,12 @@ bin/
 # frontend
 frontend/node_modules/
 frontend/dist/
+frontend/dist-desktop/
+frontend/wailsjs/
+desktop/build/bin/
+desktop/build/darwin/iconfile.icns
+desktop/build/README.md
+desktop/build/windows/
 frontend/.env
 frontend/.env.local
 *.local

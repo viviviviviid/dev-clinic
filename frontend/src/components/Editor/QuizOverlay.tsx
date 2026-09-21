@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import type { editor } from 'monaco-editor'
+import { useStore } from '../../store'
 import type { QuizData, QuizItem } from '../../store'
+import { quizMarkers } from './quizMarkers'
+import { createQuizAnswerRequest } from './quizAnswer'
 
 interface QuizOverlayProps {
   editor: editor.IStandaloneCodeEditor
@@ -11,63 +14,32 @@ interface QuizOverlayProps {
   onFocusMarker: (markerType: string, markerIndex: number) => void
 }
 
-interface QuizLine {
-  key: string
-  lineNumber: number
-  item: QuizItem
-  isLocked: boolean
-}
-
 interface OpenZone {
-  dom: HTMLDivElement
+  zone: editor.IViewZone
   zoneId: string
-  docTop: number
 }
 
 export default function QuizOverlay({ editor, filename, content, quizData, solvedHoles, onFocusMarker }: QuizOverlayProps) {
+  const answerBusy = useStore(state => state.isChatStreaming || state.pendingChatAnswer !== null || state.workspaceMutationLocked)
   const [scrollTop, setScrollTop] = useState(editor.getScrollTop())
   const [, forceUpdate] = useState(0)
   const openZonesRef = useRef<Map<string, OpenZone>>(new Map())
   const [openWidgets, setOpenWidgets] = useState<Set<string>>(new Set())
+  const [zoneTops, setZoneTops] = useState<Record<string, number>>({})
   const [hintLevels, setHintLevels] = useState<Record<string, number>>({})
 
-  const quizLines = useMemo<QuizLine[]>(() => {
-    const lines: QuizLine[] = []
-    let holeIdx = 0
-    let bugIdx = 0
-    let firstActiveHoleFound = false
-
-    content.split('\n').forEach((line, idx) => {
-      if (line.includes('[TUTOR:HOLE]')) {
-        const newKey = `${filename}:hole:${holeIdx}`
-        const legacyKey = `${filename}:${holeIdx}`
-        const item = quizData[newKey] ?? quizData[legacyKey]
-        const resolvedKey = quizData[newKey] ? newKey : legacyKey
-        const isSolved = solvedHoles.has(resolvedKey) || solvedHoles.has(newKey)
-        if (item && !isSolved) {
-          const isLocked = firstActiveHoleFound
-          if (!firstActiveHoleFound) firstActiveHoleFound = true
-          lines.push({ key: resolvedKey, lineNumber: idx + 1, item, isLocked })
-        }
-        holeIdx++
-      }
-      if (line.includes('[TUTOR:BUG]')) {
-        const key = `${filename}:bug:${bugIdx}`
-        const item = quizData[key]
-        if (item && !solvedHoles.has(key)) {
-          lines.push({ key, lineNumber: idx + 1, item, isLocked: false })
-        }
-        bugIdx++
-      }
-    })
-
-    return lines
-  }, [content, filename, quizData, solvedHoles])
+  const quizLines = useMemo(() => quizMarkers(content, filename, quizData, solvedHoles), [content, filename, quizData, solvedHoles])
 
   useEffect(() => {
     const d1 = editor.onDidScrollChange(() => setScrollTop(editor.getScrollTop()))
     const d2 = editor.onDidLayoutChange(() => forceUpdate(n => n + 1))
-    return () => { d1.dispose(); d2.dispose() }
+    // File props render before Monaco switches models. Recalculate against the
+    // new model so markers do not keep the previous file's line positions.
+    const d3 = editor.onDidChangeModel(() => {
+      setScrollTop(editor.getScrollTop())
+      forceUpdate(n => n + 1)
+    })
+    return () => { d1.dispose(); d2.dispose(); d3.dispose() }
   }, [editor])
 
   useEffect(() => {
@@ -90,6 +62,8 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     })
     if (toRemove.length > 0) {
       toRemove.forEach(k => openZonesRef.current.delete(k))
+      // Mirror removal of external Monaco view zones so undo can reopen a marker.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setOpenWidgets(prev => {
         const next = new Set(prev)
         toRemove.forEach(k => next.delete(k))
@@ -103,7 +77,8 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     if (!zone) return
     const MAX_ZONE = 480
     const capped = Math.min(Math.max(40, Math.ceil(height)), MAX_ZONE)
-    zone.dom.style.height = `${capped}px`
+    if (zone.zone.heightInPx === capped) return
+    zone.zone.heightInPx = capped
     editor.changeViewZones(accessor => accessor.layoutZone(zone.zoneId))
   }, [editor])
 
@@ -111,24 +86,19 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     if (openWidgets.has(key)) return
     const savedScroll = editor.getScrollTop()
     const dom = document.createElement('div')
-    dom.style.height = '360px'
-    const capturedKey = key
-    const initialDocTop = editor.getTopForLineNumber(lineNumber)
-
+    const zone: editor.IViewZone = {
+      afterLineNumber: lineNumber,
+      domNode: dom,
+      heightInPx: 240,
+      suppressMouseDown: true,
+      onDomNodeTop: top => setZoneTops(previous => previous[key] === top ? previous : { ...previous, [key]: top }),
+    }
     let newZoneId = ''
     editor.changeViewZones(accessor => {
-      newZoneId = accessor.addZone({
-        afterLineNumber: lineNumber,
-        domNode: dom,
-        suppressMouseDown: true,
-        onDomNodeTop: (top) => {
-          const zone = openZonesRef.current.get(capturedKey)
-          if (zone) { zone.docTop = top; forceUpdate(n => n + 1) }
-        },
-      })
+      newZoneId = accessor.addZone(zone)
     })
 
-    openZonesRef.current.set(key, { dom, zoneId: newZoneId, docTop: initialDocTop })
+    openZonesRef.current.set(key, { zone, zoneId: newZoneId })
     editor.setScrollTop(savedScroll)
     setOpenWidgets(prev => new Set([...prev, key]))
     forceUpdate(n => n + 1)
@@ -144,9 +114,24 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
     forceUpdate(n => n + 1)
   }
 
+  function generateAnswer(item: QuizItem, key: string) {
+    const store = useStore.getState()
+    try {
+      // Read the live model so the answer sees edits made since the card opened.
+      const request = createQuizAnswerRequest(filename, editor.getValue(), item)
+      if (!store.requestChatAnswer(request)) {
+        store.addToast('진행 중인 채팅이나 단계 변경이 끝나면 답지를 생성할 수 있습니다.', 'info')
+        return
+      }
+      closeHint(key)
+    } catch (error) {
+      store.addToast(error instanceof Error ? error.message : '답지를 요청하지 못했습니다.', 'error')
+    }
+  }
+
   return (
     <div className="quiz-overlay">
-      {quizLines.map(({ key, lineNumber, item, isLocked }) => {
+      {quizLines.map(({ key, lineNumber, item }) => {
         const viewTop = editor.getTopForLineNumber(lineNumber) - scrollTop
         const isOpen = openWidgets.has(key)
         const isBug = item.markerType === 'bug'
@@ -154,37 +139,35 @@ export default function QuizOverlay({ editor, filename, content, quizData, solve
           <button
             type="button"
             key={key}
-            className={`quiz-glyph-btn${isBug ? ' bug' : ' hole'}${isLocked ? ' locked' : ''}${isOpen ? ' open' : ''}`}
+            className={`quiz-glyph-btn${isBug ? ' bug' : ' hole'}${isOpen ? ' open' : ''}`}
             style={{ top: viewTop }}
             onClick={() => {
-              if (isLocked) return
               if (isOpen) closeHint(key)
               else openHint(key, lineNumber)
             }}
-            title={isLocked ? '앞 HOLE을 먼저 해결하세요' : (isOpen ? '닫기' : '열기')}
-            aria-label={isLocked
-              ? `${isBug ? '버그' : '빈칸'} 과제 잠김: 앞 과제를 먼저 해결하세요`
-              : `${isBug ? '버그' : '빈칸'} 과제 ${isOpen ? '닫기' : '열기'}`}
+            title={`${isBug ? '버그' : '빈칸'} 과제 ${isOpen ? '닫기' : '열기'}`}
+            aria-label={`${isBug ? '버그' : '빈칸'} 과제 ${isOpen ? '닫기' : '열기'}`}
             aria-expanded={isOpen}
             aria-controls={`quiz-card-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
-            disabled={isLocked}
           />
         )
       })}
 
       {quizLines.map(({ key, item }) => {
         if (!openWidgets.has(key)) return null
-        const zone = openZonesRef.current.get(key)
-        if (!zone) return null
+        const top = zoneTops[key]
+        if (top === undefined) return null
         const hints = item.hints ?? []
         return (
           <HintCard
             key={key}
             quizKey={key}
             item={item}
-            top={zone.docTop - scrollTop}
+            top={top}
             hints={hints}
             hintLevel={hintLevels[key] ?? 0}
+            answerBusy={answerBusy}
+            onGenerateAnswer={() => generateAnswer(item, key)}
             onFocusMarker={() => {
               onFocusMarker(item.markerType || 'hole', item.markerIndex ?? 0)
               closeHint(key)
@@ -206,6 +189,8 @@ interface HintCardProps {
   top: number
   hints: string[]
   hintLevel: number
+  answerBusy: boolean
+  onGenerateAnswer: () => void
   onFocusMarker: () => void
   onRevealHint: () => void
   onClose: () => void
@@ -214,7 +199,7 @@ interface HintCardProps {
 
 function HintCard({
   quizKey, item, top, hints, hintLevel,
-  onFocusMarker,
+  onFocusMarker, answerBusy, onGenerateAnswer,
   onRevealHint, onClose, onHeightChange,
 }: HintCardProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -259,6 +244,15 @@ function HintCard({
             onClick={onFocusMarker}
           >
             에디터에서 직접 수정 →
+          </button>
+          <button
+            type="button"
+            className="write-submit-btn quiz-answer-btn"
+            onClick={onGenerateAnswer}
+            disabled={answerBusy}
+            title={answerBusy ? '진행 중인 채팅이나 단계 변경이 끝나면 사용할 수 있습니다.' : '이 문제의 답안과 해설을 채팅에서 확인합니다.'}
+          >
+            AI 답지 생성 → 채팅
           </button>
         </div>
 

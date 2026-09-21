@@ -1,6 +1,45 @@
 # coding-tutor
 
-개인용 AI 코딩 튜터입니다. Vercel은 정적 React 화면만 호스팅하고, 파일 접근·코드 실행·AI 호출은 Mac에서 실행하는 단일 `clinic` 프로세스가 담당합니다.
+개인용 AI 코딩 튜터입니다. macOS 앱 또는 Vercel 웹 화면으로 사용할 수 있으며, 파일 접근·코드 실행·AI 호출은 Mac의 단일 `clinic` 프로세스가 담당합니다.
+
+## macOS 앱
+
+`Coding Tutor.app`을 응용 프로그램 폴더로 옮겨 실행하면 독립된 창이 열리고 로컬 서버도 자동으로 시작됩니다. 창을 닫거나 `Cmd+Q`를 누르면 앱과 서버가 함께 종료됩니다. React 화면은 앱에 포함되며, 기존 웹 사용 방식도 유지됩니다.
+
+```bash
+npm --prefix frontend ci
+make build-mac
+open "desktop/build/bin/Coding Tutor.app"
+```
+
+빌드에는 macOS, Xcode Command Line Tools, Go 1.25+, Node.js 24가 필요합니다. Wails CLI는 `v2.15.0`으로 고정되어 별도 전역 설치 없이 실행됩니다. 기본 빌드는 현재 Mac의 CPU 아키텍처용이며, 개발자 서명·공증을 하지 않은 로컬 사용용입니다. 다른 사용자에게 배포하려면 Developer ID 서명과 Apple 공증이 별도로 필요합니다.
+
+앱을 사용하는 Mac에는 Codex CLI와 로그인이 필요합니다 (`codex login`). 학습 코드를 실행할 언어 도구도 기존 웹 버전과 동일하게 설치되어 있어야 합니다. 앱은 Finder 실행 환경에서도 로그인 셸의 PATH를 찾아 Homebrew·nvm·Go·Codex를 사용합니다.
+
+### Google 로그인 연결 — 운영자 최초 1회
+
+Supabase Dashboard → Authentication → URL Configuration → Redirect URLs에 다음 주소를 추가합니다. 기존 웹 Site URL과 Redirect URLs는 그대로 유지합니다.
+
+```text
+coding-tutor://auth/callback
+```
+
+앱에서 `Google로 로그인`을 누르면 기본 브라우저가 열리고, 로그인 완료 후 앱으로 돌아옵니다. 브라우저의 앱 열기 안내를 허용하세요. PKCE를 사용하므로 URL에는 일회용 인증 코드만 전달되고, 세션 토큰은 URL로 전달하지 않습니다. 복귀 주소가 등록되지 않으면 Supabase가 기존 웹 Site URL로 보내므로 앱 로그인이 완료되지 않습니다. 이 설정에는 프론트엔드 재배포가 필요하지 않습니다.
+
+### 학습 파일과 설정
+
+기본 저장 폴더는 `~/Coding Tutor`입니다. 앱을 업데이트하거나 삭제해도 학습 파일은 이 폴더에 남습니다. 기존 `data/`의 프로젝트를 계속 사용하려면 `~/Library/Application Support/Coding Tutor/config.toml`에 기존 학습 폴더의 절대 경로를 지정하고 앱을 다시 실행하세요. 파일을 자동 이동하거나 기존 프로젝트를 덮어쓰지 않습니다.
+
+```toml
+base_dir = "/Users/your-name/learning"
+
+# 자체 배포 또는 Codex 경로 지정이 필요한 경우에만 설정합니다.
+# site_url = "https://your-site.example"
+# [codex]
+# executable = "/absolute/path/to/codex"
+```
+
+앱은 충돌을 피하기 위해 비어 있는 loopback 포트를 자동으로 사용합니다. 화면에는 공개 Supabase 설정과 해당 포트만 전달하며, 기존 JWT·Origin·파일 경로 검증은 그대로 적용합니다. Vercel 웹 화면에서 별도로 실행한 clinic과도 함께 사용할 수 있습니다.
 
 ## 확정 아키텍처
 

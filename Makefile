@@ -1,4 +1,4 @@
-.PHONY: dev dev-be dev-fe test lint build-fe build-be build
+.PHONY: dev dev-be dev-fe test lint build-fe build-be build build-mac
 
 DIR ?= $(CURDIR)/data
 
@@ -16,6 +16,11 @@ build-be:
 	go build -o bin/clinic ./cmd/clinic
 
 build: build-fe build-be
+
+# Pinned CLI keeps local builds reproducible without a global Wails install.
+build-mac:
+	npm --prefix frontend run build:desktop
+	cd cmd/clinic && go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -s -clean
 
 test:
 	go test ./cmd/... ./internal/...

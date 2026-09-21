@@ -179,7 +179,7 @@ func create() int {
 }
 
 func TestCodeGenerationPromptKeepsTasksSmallAndUnsolved(t *testing.T) {
-	for _, want := range []string{"현재 단계 과제", "정답 코드", "최대 4줄", "독립 marker", "선언부와 중괄호"} {
+	for _, want := range []string{"현재 단계 과제", "정답 코드", "최대 4줄", "총 4개 이하", "선언부와 중괄호"} {
 		if !strings.Contains(codeFilesSystemPrompt, want) {
 			t.Fatalf("code generation prompt is missing %q", want)
 		}

@@ -146,10 +146,17 @@ export function installEditorAutosaveLifecycle(
     void autosave.flushAll()
   }
 
+  const flushBeforeDesktopClose: EventListener = event => {
+    const request = (event as CustomEvent<{ waitUntil: (save: Promise<boolean>) => void }>).detail
+    request.waitUntil(autosave.flushAll())
+  }
+
+  target.addEventListener('clinic:save-before-close', flushBeforeDesktopClose)
   target.addEventListener('pagehide', flushOnPageHide)
   target.addEventListener('beforeunload', warnAndFlushBeforeUnload)
   return () => {
     target.removeEventListener('pagehide', flushOnPageHide)
     target.removeEventListener('beforeunload', warnAndFlushBeforeUnload)
+    target.removeEventListener('clinic:save-before-close', flushBeforeDesktopClose)
   }
 }

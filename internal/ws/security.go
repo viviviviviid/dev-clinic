@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -53,6 +54,9 @@ func Upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, string, e
 	if err != nil {
 		return nil, "", err
 	}
+	// HTTP shutdown does not close hijacked WebSockets. Closing on the server
+	// context also releases terminal/LSP handlers and their child processes.
+	context.AfterFunc(r.Context(), func() { _ = conn.Close() })
 	return conn, userID, nil
 }
 

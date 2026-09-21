@@ -58,7 +58,9 @@ func validateGeneratedProject(contract tutoringLanguageContract, generated, exis
 	}
 
 	holes, bugs := 0, 0
+	generatedPaths := make(map[string]bool, len(generated))
 	for name, content := range generated {
+		generatedPaths[filepathKey(name)] = true
 		isTest := isDedicatedTestFile(contract.name, name)
 		fileHoles, fileBugs, err := validateMarkerLayout(contract, name, content, isTest)
 		if err != nil {
@@ -70,8 +72,22 @@ func validateGeneratedProject(contract tutoringLanguageContract, generated, exis
 	if holes == 0 || bugs == 0 {
 		return fmt.Errorf("generated files must contain at least one [TUTOR:HOLE] and one [TUTOR:BUG]")
 	}
+	// Untouched files still belong to the next chapter. Count their remaining
+	// exercises too, while counting replaced files only once.
+	for name, content := range merged {
+		if generatedPaths[name] || !isContractSourceFile(contract.name, name) ||
+			isDedicatedTestFile(contract.name, name) || !containsTutorMarker(content) {
+			continue
+		}
+		fileHoles, fileBugs, err := validateMarkerLayout(contract, name, content, false)
+		if err != nil {
+			return err
+		}
+		holes += fileHoles
+		bugs += fileBugs
+	}
 	if holes+bugs > maxQuizItemCount {
-		return fmt.Errorf("generated marker count exceeds %d", maxQuizItemCount)
+		return fmt.Errorf("chapter has %d HOLE/BUG exercises across all files; maximum is %d", holes+bugs, maxQuizItemCount)
 	}
 	return nil
 }

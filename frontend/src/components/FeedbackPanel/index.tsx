@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import type { KeyboardEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { canUseReviewControl, useStore } from '../../store'
-import type { ProjectStatus } from '../../store'
+import type { FeedbackTab, ProjectStatus } from '../../store'
 import {
   applyReviewSnapshot,
   reviewRecoveryFromRequestError,
@@ -15,12 +15,11 @@ import { getErrorMessage, isAbortError } from '../../lib/errors'
 import Confetti from '../Confetti'
 import { advanceButtonLabel } from './advanceUx'
 import { ChatSseParser } from './chatSse'
+import { chatCodeKey, chatCodeLabel } from '../../lib/chatCodeContext'
+import type { ChatCodeReference, ChatAnswerRequest } from '../../lib/chatCodeContext'
 import './FeedbackPanel.css'
 
-type Tab = 'feedback' | 'tasks' | 'chat'
-
 export default function FeedbackPanel() {
-  const [tab, setTab] = useState<Tab>('tasks')
   const [advancing, setAdvancing] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [showSnapshotMenu, setShowSnapshotMenu] = useState(false)
@@ -30,6 +29,7 @@ export default function FeedbackPanel() {
   const [pendingCompletion, setPendingCompletion] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const chatScrollRef = useRef<HTMLDivElement>(null)
+  const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const chatAbortRef = useRef<AbortController | null>(null)
   const advanceAbortRef = useRef<AbortController | null>(null)
   const restoreAbortRef = useRef<AbortController | null>(null)
@@ -51,6 +51,14 @@ export default function FeedbackPanel() {
     setQuizData,
     clearSolvedHoles,
     openFileContent,
+    feedbackTab: tab,
+    setFeedbackTab: setTab,
+    chatFocusRequest,
+    chatCodeReferences,
+    removeChatCode,
+    clearChatCode,
+    pendingChatAnswer,
+    takeChatAnswer,
     chatMessages,
     isChatStreaming,
     currentChatStreaming,
@@ -220,19 +228,16 @@ export default function FeedbackPanel() {
     }
   }
 
-  async function handleSendChat() {
-    const msg = chatInput.trim()
-    if (!msg || isChatStreaming) return
-
-    setChatInput('')
-    addUserChatMessage(msg)
+  const runChat = useCallback(async (msg: string, fileContent: string, references: ChatCodeReference[], answer?: ChatAnswerRequest) => {
+    if (useStore.getState().isChatStreaming || chatAbortRef.current) return
+    const history = useStore.getState().chatMessages
+    addUserChatMessage(msg, references)
     startChatStream()
-    chatAbortRef.current?.abort()
     const abort = new AbortController()
     chatAbortRef.current = abort
 
     try {
-      const stream = await sendChat(msg, openFileContent, chatMessages, abort.signal)
+      const stream = await sendChat(msg, fileContent, history, abort.signal, references, answer)
       const reader = stream.getReader()
       const decoder = new TextDecoder()
       const parser = new ChatSseParser()
@@ -241,6 +246,10 @@ export default function FeedbackPanel() {
       try {
         while (true) {
           const { done, value } = await reader.read()
+          if (chatAbortRef.current !== abort || abort.signal.aborted) {
+            await reader.cancel()
+            return
+          }
           const events = done
             ? [...parser.push(decoder.decode()), ...parser.finish()]
             : parser.push(decoder.decode(value, { stream: true }))
@@ -257,6 +266,7 @@ export default function FeedbackPanel() {
       if (!receivedDone) throw new Error('AI 채팅이 완료 신호 없이 종료되었습니다. 다시 시도해 주세요.')
       endChatStream()
     } catch (error: unknown) {
+      if (chatAbortRef.current !== abort) return
       if (isAbortError(error)) {
         cancelChatStream()
         return
@@ -268,10 +278,29 @@ export default function FeedbackPanel() {
     } finally {
       if (chatAbortRef.current === abort) chatAbortRef.current = null
     }
+  }, [addUserChatMessage, startChatStream, sendChat, addChatChunk, endChatStream, cancelChatStream, addToast])
+
+  useEffect(() => {
+    if (!pendingChatAnswer) return
+    // Claim once, even when React reruns the effect during state updates.
+    const request = takeChatAnswer()
+    if (!request) return
+    const { answer, fileContent } = request
+    const message = `${chatCodeLabel(answer.reference)}의 ${answer.markerType.toUpperCase()} 문제에 대한 답안과 해설을 보여주세요.`
+    void runChat(message, fileContent, [answer.reference], answer)
+  }, [pendingChatAnswer, takeChatAnswer, runChat])
+
+  function handleSendChat() {
+    const msg = chatInput.trim()
+    if (!msg || isChatStreaming || pendingChatAnswer || chatAbortRef.current) return
+    setChatInput('')
+    const references = chatCodeReferences
+    clearChatCode()
+    void runChat(msg, openFileContent, references)
   }
 
   function handleChatKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSendChat()
     }
@@ -365,16 +394,35 @@ export default function FeedbackPanel() {
     } catch { return iso }
   }
 
-  useEffect(() => () => {
-    chatAbortRef.current?.abort()
-    advanceAbortRef.current?.abort()
-    restoreAbortRef.current?.abort()
-    reviewAbortRef.current?.abort()
-    cancelChatStream()
+  useEffect(() => {
+    const unsubscribe = useStore.subscribe((state, previous) => {
+      if (state.projectDir !== previous.projectDir || state.projectSessionEpoch !== previous.projectSessionEpoch ||
+          state.projectStatus?.currentStep !== previous.projectStatus?.currentStep) {
+        chatAbortRef.current?.abort()
+        chatAbortRef.current = null
+        if (state.pendingChatAnswer) state.takeChatAnswer()
+        cancelChatStream()
+      }
+    })
+    return () => {
+      unsubscribe()
+      chatAbortRef.current?.abort()
+      chatAbortRef.current = null
+      advanceAbortRef.current?.abort()
+      restoreAbortRef.current?.abort()
+      reviewAbortRef.current?.abort()
+      cancelChatStream()
+    }
   }, [cancelChatStream])
 
   // AI 응답이 시작돼도 사용자가 읽고 있던 과제/채팅 탭을 바꾸지 않습니다.
-  const activeTab: Tab = tab
+  const activeTab: FeedbackTab = tab
+
+  useEffect(() => {
+    if (chatFocusRequest > 0 && activeTab === 'chat' && !isChatStreaming) {
+      chatInputRef.current?.focus()
+    }
+  }, [chatFocusRequest, activeTab, isChatStreaming])
 
   useEffect(() => {
     if (activeTab === 'feedback' && feedbackUnread) setFeedbackRead()
@@ -592,18 +640,28 @@ export default function FeedbackPanel() {
 
       {/* 과제 탭 */}
       {activeTab === 'tasks' && (
-        <div className="feedback-content">
+        <div className="feedback-content" key={`${projectStatus?.dir}-${projectStatus?.currentStep}`}>
           {!projectStatus?.loaded ? (
             <div className="feedback-empty"><p>프로젝트를 먼저 로드하세요.</p></div>
           ) : (
             <div className="tasks-panel">
-              {projectStatus.totalSteps > 0 && (
-                <section className="tasks-section tasks-progress-section" aria-label="현재 학습 단계">
-                  <span className="tasks-progress-label">
-                    {projectStatus.totalSteps}단계 중 {projectStatus.currentStepNum}단계
-                  </span>
-                </section>
-              )}
+              <section className="tasks-section tasks-step-intro" aria-label="이번 단계 안내">
+                <div className="tasks-progress-section" aria-label="현재 학습 단계">
+                  {projectStatus.totalSteps > 0 && (
+                    <span className="tasks-progress-label">
+                      {projectStatus.totalSteps}단계 중 {projectStatus.currentStepNum}단계
+                    </span>
+                  )}
+                  <span className="tasks-badge lang">{projectStatus.language}</span>
+                </div>
+                <p className="tasks-step-eyebrow">이번 단계</p>
+                <h3 className="tasks-step-title">{projectStatus.stepTitle || projectStatus.currentStep}</h3>
+                {projectStatus.stepOverview && (
+                  <div className="tasks-step-overview feedback-message-content">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{projectStatus.stepOverview}</ReactMarkdown>
+                  </div>
+                )}
+              </section>
 
               {projectStatus.tasks && (
                 <section className="tasks-section">
@@ -617,12 +675,8 @@ export default function FeedbackPanel() {
               )}
 
               <section className="tasks-section">
-                <h3 className="tasks-section-title">학습 목표</h3>
+                <h3 className="tasks-section-title">전체 학습 목표</h3>
                 <p className="tasks-goal">{projectStatus.goal || '—'}</p>
-                <div className="tasks-meta">
-                  <span className="tasks-badge lang">{projectStatus.language}</span>
-                  <span className="tasks-badge step">{projectStatus.currentStep}</span>
-                </div>
               </section>
 
               {projectStatus.concept && (
@@ -703,12 +757,13 @@ export default function FeedbackPanel() {
             {chatMessages.length === 0 && !isChatStreaming && (
               <div className="feedback-empty">
                 <p>AI 튜터에게 질문하세요.</p>
-                <p className="feedback-empty-hint">현재 열린 파일을 기반으로 답변합니다.</p>
+                <p className="feedback-empty-hint">현재 열린 파일을 기반으로 답변합니다. 코드 선택 후 ⌘L / Ctrl+L로 질문할 부분을 첨부할 수 있습니다.</p>
               </div>
             )}
 
             {chatMessages.map((msg, i) => (
               <div key={i} className={`chat-msg chat-msg-${msg.role}`}>
+                {msg.codeReferences?.length ? <ChatCodeReferences references={msg.codeReferences} /> : null}
                 <div className="feedback-message-content">
                   {msg.role === 'ai' ? (
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
@@ -730,20 +785,24 @@ export default function FeedbackPanel() {
           </div>
 
           <div className="chat-input-area">
-            <textarea
-              className="chat-textarea"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={handleChatKeyDown}
-              placeholder="질문을 입력하세요… (Enter 전송, Shift+Enter 줄바꿈)"
-              aria-label="AI 튜터에게 보낼 질문"
-              rows={3}
-              disabled={isChatStreaming}
-            />
+            <div className="chat-composer">
+              <ChatCodeReferences references={chatCodeReferences} onRemove={removeChatCode} />
+              <textarea
+                ref={chatInputRef}
+                className="chat-textarea"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={handleChatKeyDown}
+                placeholder={chatCodeReferences.length ? '선택한 코드에 대해 질문하세요…' : '질문을 입력하세요… (Enter 전송, Shift+Enter 줄바꿈)'}
+                aria-label="AI 튜터에게 보낼 질문"
+                rows={3}
+                disabled={isChatStreaming || pendingChatAnswer !== null}
+              />
+            </div>
             <button
               className="chat-send-btn"
               onClick={handleSendChat}
-              disabled={isChatStreaming || !chatInput.trim()}
+              disabled={isChatStreaming || pendingChatAnswer !== null || !chatInput.trim()}
             >
               {isChatStreaming ? '…' : '전송'}
             </button>
@@ -751,5 +810,26 @@ export default function FeedbackPanel() {
         </div>
       )}
     </div>
+  )
+}
+
+function ChatCodeReferences({ references, onRemove }: { references: ChatCodeReference[]; onRemove?: (key: string) => void }) {
+  if (!references.length) return null
+  return (
+    <ul className="chat-code-references" aria-label="첨부한 코드">
+      {references.map(reference => {
+        const key = chatCodeKey(reference)
+        const label = chatCodeLabel(reference)
+        return (
+          <li key={key} className="chat-code-reference">
+            <details>
+              <summary title={label}>{label}</summary>
+              <pre><code>{reference.code}</code></pre>
+            </details>
+            {onRemove && <button type="button" onClick={() => onRemove(key)} aria-label={`${label} 첨부 제거`} title="첨부 제거">×</button>}
+          </li>
+        )
+      })}
+    </ul>
   )
 }

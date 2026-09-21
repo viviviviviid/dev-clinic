@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
-import { resolveSupabaseConfig } from './bootConfig'
+import { runtimeConfig } from './runtimeConfig'
+import { isDesktop } from './desktop'
 
-const { supabaseUrl, supabaseAnonKey } = resolveSupabaseConfig(import.meta.env)
+const { supabaseUrl, supabaseAnonKey } = runtimeConfig()
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: isDesktop() ? { flowType: 'pkce', detectSessionInUrl: false } : undefined,
+})

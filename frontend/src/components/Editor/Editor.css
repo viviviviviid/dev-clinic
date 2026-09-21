@@ -282,11 +282,35 @@
 /* 실행 출력 패널 */
 .run-output-panel {
   flex-shrink: 0;
-  height: 180px;
+  min-height: 80px;
   display: flex;
   flex-direction: column;
   background: #0d1117;
   border-top: 1px solid #21262d;
+}
+
+.run-output-resizer {
+  height: 7px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.run-output-resizer span {
+  width: 36px;
+  height: 2px;
+  background: #484f58;
+  border-radius: 2px;
+}
+
+.run-output-resizer:hover,
+.run-output-resizer:focus-visible {
+  background: #1f6feb;
+  outline: none;
 }
 
 .run-output-header {
@@ -323,6 +347,7 @@
 
 .run-output-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px 12px;
   font-family: 'Consolas', 'Courier New', monospace;
@@ -965,6 +990,10 @@
 
 .write-submit-btn:hover:not(:disabled) { opacity: 0.85; }
 .write-submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.quiz-answer-btn {
+  background: #1f6feb;
+}
 
 .quiz-verification-note,
 .quiz-submit-error {
